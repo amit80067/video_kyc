@@ -1,5 +1,6 @@
 const pool = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
+const smsService = require('../services/smsService');
 
 class SessionController {
     async createSession(req, res) {
@@ -27,9 +28,24 @@ class SessionController {
                 [sessionId, userName, userPhone, userEmail, agentId, joinLink, linkExpiresAt, 'not_started']
             );
 
+            // Send SMS to user with verification link
+            if (userPhone && smsService.isAvailable()) {
+                try {
+                    await smsService.sendVerificationSMS(userPhone, userName, joinLink);
+                    console.log(`SMS sent successfully to ${userPhone} for session ${sessionId}`);
+                } catch (smsError) {
+                    // Log error but don't fail the session creation
+                    console.error('Failed to send SMS:', smsError);
+                    // Session created successfully, just SMS failed
+                }
+            } else if (userPhone && !smsService.isAvailable()) {
+                console.warn('SMS service not available. Twilio credentials missing.');
+            }
+
             res.status(201).json({
                 success: true,
-                session: result.rows[0]
+                session: result.rows[0],
+                smsSent: userPhone && smsService.isAvailable() ? true : false
             });
         } catch (error) {
             console.error('Create session error:', error);

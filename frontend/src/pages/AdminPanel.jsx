@@ -46,10 +46,25 @@ const AdminPanel = () => {
     userPhone: '',
     userEmail: '',
   });
+  const [countryCode, setCountryCode] = useState('+91');
   const [validationErrors, setValidationErrors] = useState({
     userPhone: '',
     userEmail: '',
   });
+
+  // Common country codes
+  const countryCodes = [
+    { code: '+91', country: 'India', flag: '🇮🇳' },
+    { code: '+1', country: 'USA/Canada', flag: '🇺🇸' },
+    { code: '+44', country: 'UK', flag: '🇬🇧' },
+    { code: '+971', country: 'UAE', flag: '🇦🇪' },
+    { code: '+92', country: 'Pakistan', flag: '🇵🇰' },
+    { code: '+880', country: 'Bangladesh', flag: '🇧🇩' },
+    { code: '+65', country: 'Singapore', flag: '🇸🇬' },
+    { code: '+60', country: 'Malaysia', flag: '🇲🇾' },
+    { code: '+61', country: 'Australia', flag: '🇦🇺' },
+    { code: '+86', country: 'China', flag: '🇨🇳' },
+  ];
   const [selectedSession, setSelectedSession] = useState(null);
   const [sessionDetails, setSessionDetails] = useState(null);
   const [openDetailsDialog, setOpenDetailsDialog] = useState(false);
@@ -160,34 +175,36 @@ const AdminPanel = () => {
     navigate('/agent/login');
   };
 
-  // Validate mobile number (Indian format: 10 digits, can start with +91 or 0)
-  const validatePhone = (phone) => {
+  // Validate mobile number based on country code
+  const validatePhone = (phone, code) => {
     if (!phone || phone.trim() === '') {
       return 'Mobile number required hai';
     }
     // Remove spaces and special characters for validation
     const cleanPhone = phone.replace(/[\s\-\(\)]/g, '');
-    // Check if it starts with +91
-    if (cleanPhone.startsWith('+91')) {
-      const digits = cleanPhone.substring(3);
-      if (digits.length === 10 && /^[6-9]\d{9}$/.test(digits)) {
+    
+    // India (+91) validation
+    if (code === '+91') {
+      // Check if it starts with 0
+      if (cleanPhone.startsWith('0')) {
+        const digits = cleanPhone.substring(1);
+        if (digits.length === 10 && /^[6-9]\d{9}$/.test(digits)) {
+          return '';
+        }
+        return 'Invalid mobile number. 10-digit Indian mobile number enter karein (6-9 se start hona chahiye)';
+      }
+      // Check if it's a 10-digit number starting with 6-9
+      if (cleanPhone.length === 10 && /^[6-9]\d{9}$/.test(cleanPhone)) {
         return '';
       }
       return 'Invalid mobile number. 10-digit Indian mobile number enter karein (6-9 se start hona chahiye)';
     }
-    // Check if it starts with 0
-    if (cleanPhone.startsWith('0')) {
-      const digits = cleanPhone.substring(1);
-      if (digits.length === 10 && /^[6-9]\d{9}$/.test(digits)) {
-        return '';
-      }
-      return 'Invalid mobile number. 10-digit Indian mobile number enter karein (6-9 se start hona chahiye)';
-    }
-    // Check if it's a 10-digit number starting with 6-9
-    if (cleanPhone.length === 10 && /^[6-9]\d{9}$/.test(cleanPhone)) {
+    
+    // Other countries - basic validation (7-15 digits)
+    if (cleanPhone.length >= 7 && cleanPhone.length <= 15 && /^\d+$/.test(cleanPhone)) {
       return '';
     }
-    return 'Invalid mobile number. 10-digit Indian mobile number enter karein (6-9 se start hona chahiye)';
+    return 'Invalid mobile number. 7-15 digits required';
   };
 
   // Validate email
@@ -195,16 +212,38 @@ const AdminPanel = () => {
     if (!email || email.trim() === '') {
       return ''; // Email is optional
     }
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
+    // More strict email validation regex
+    const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+    const trimmedEmail = email.trim();
+    
+    // Check basic format
+    if (!emailRegex.test(trimmedEmail)) {
       return 'Invalid email address. Valid email enter karein (e.g., user@example.com)';
     }
+    
+    // Check for consecutive dots
+    if (trimmedEmail.includes('..')) {
+      return 'Invalid email address. Consecutive dots not allowed';
+    }
+    
+    // Check if @ symbol exists and is not at start or end
+    const atIndex = trimmedEmail.indexOf('@');
+    if (atIndex <= 0 || atIndex >= trimmedEmail.length - 1) {
+      return 'Invalid email address. Valid email enter karein (e.g., user@example.com)';
+    }
+    
+    // Check domain part
+    const domain = trimmedEmail.split('@')[1];
+    if (!domain || domain.length < 3 || !domain.includes('.')) {
+      return 'Invalid email address. Domain invalid hai';
+    }
+    
     return '';
   };
 
   const handleCreateSession = async () => {
-    // Validate phone number
-    const phoneError = validatePhone(newSession.userPhone);
+    // Validate phone number with country code
+    const phoneError = validatePhone(newSession.userPhone, countryCode);
     const emailError = validateEmail(newSession.userEmail);
     
     setValidationErrors({
@@ -218,10 +257,18 @@ const AdminPanel = () => {
     }
 
     try {
-      const response = await api.post('/sessions', newSession);
+      // Combine country code with phone number
+      const fullPhoneNumber = countryCode + newSession.userPhone.replace(/^0+/, '');
+      const sessionData = {
+        ...newSession,
+        userPhone: fullPhoneNumber,
+      };
+      
+      const response = await api.post('/sessions', sessionData);
       alert(`Session created! Link: ${response.data.session.join_link}`);
       setOpenDialog(false);
       setNewSession({ userName: '', userPhone: '', userEmail: '' });
+      setCountryCode('+91');
       setValidationErrors({ userPhone: '', userEmail: '' });
       loadSessions();
     } catch (err) {
@@ -467,45 +514,74 @@ const AdminPanel = () => {
                 fullWidth
                 required
               />
-              <TextField
-                label="User Phone *"
-                value={newSession.userPhone}
-                onChange={(e) => {
-                  setNewSession({ ...newSession, userPhone: e.target.value });
-                  // Clear error when user starts typing
-                  if (validationErrors.userPhone) {
-                    setValidationErrors({ ...validationErrors, userPhone: '' });
-                  }
-                }}
-                onBlur={(e) => {
-                  // Validate on blur
-                  const error = validatePhone(e.target.value);
-                  setValidationErrors({ ...validationErrors, userPhone: error });
-                }}
-                fullWidth
-                required
-                error={!!validationErrors.userPhone}
-                helperText={validationErrors.userPhone || 'Enter 10-digit Indian mobile number (e.g., 9876543210)'}
-              />
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                <TextField
+                  select
+                  label="Country Code"
+                  value={countryCode}
+                  onChange={(e) => {
+                    setCountryCode(e.target.value);
+                    // Re-validate phone when country code changes
+                    if (newSession.userPhone.trim() !== '') {
+                      const error = validatePhone(newSession.userPhone, e.target.value);
+                      setValidationErrors({ ...validationErrors, userPhone: error });
+                    }
+                  }}
+                  sx={{ minWidth: 140 }}
+                  SelectProps={{
+                    native: false,
+                  }}
+                >
+                  {countryCodes.map((country) => (
+                    <MenuItem key={country.code} value={country.code}>
+                      {country.flag} {country.code} ({country.country})
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  label="User Phone *"
+                  value={newSession.userPhone}
+                  onChange={(e) => {
+                    const phoneValue = e.target.value;
+                    setNewSession({ ...newSession, userPhone: phoneValue });
+                    // Real-time validation - validate as user types
+                    if (phoneValue.trim() !== '') {
+                      const error = validatePhone(phoneValue, countryCode);
+                      setValidationErrors({ ...validationErrors, userPhone: error });
+                    } else {
+                      setValidationErrors({ ...validationErrors, userPhone: '' });
+                    }
+                  }}
+                  onBlur={(e) => {
+                    // Validate on blur to ensure final check
+                    const error = validatePhone(e.target.value, countryCode);
+                    setValidationErrors({ ...validationErrors, userPhone: error });
+                  }}
+                  fullWidth
+                  required
+                  error={!!validationErrors.userPhone}
+                  helperText={validationErrors.userPhone || (countryCode === '+91' ? '10-digit Indian mobile number enter karein (e.g., 9876543210)' : 'Mobile number enter karein')}
+                />
+              </Box>
               <TextField
                 label="User Email"
                 type="email"
                 value={newSession.userEmail}
                 onChange={(e) => {
-                  setNewSession({ ...newSession, userEmail: e.target.value });
-                  // Clear error when user starts typing
-                  if (validationErrors.userEmail) {
-                    setValidationErrors({ ...validationErrors, userEmail: '' });
-                  }
+                  const emailValue = e.target.value;
+                  setNewSession({ ...newSession, userEmail: emailValue });
+                  // Real-time validation - validate as user types
+                  const error = validateEmail(emailValue);
+                  setValidationErrors({ ...validationErrors, userEmail: error });
                 }}
                 onBlur={(e) => {
-                  // Validate on blur
+                  // Validate on blur to ensure final check
                   const error = validateEmail(e.target.value);
                   setValidationErrors({ ...validationErrors, userEmail: error });
                 }}
                 fullWidth
                 error={!!validationErrors.userEmail}
-                helperText={validationErrors.userEmail || 'Optional: Enter a valid email address'}
+                helperText={validationErrors.userEmail || 'Optional: Valid email address enter karein (e.g., user@example.com)'}
               />
             </Box>
           </DialogContent>

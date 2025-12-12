@@ -16,6 +16,9 @@ class WebRTCService {
     this.recordedChunks = [];
     this.statsInterval = null;
     this.onStatsUpdate = null;
+    this.currentVideoQuality = 'medium'; // Start with medium, upgrade to 'high' only on excellent network
+    this.qualityAdjustmentInterval = null;
+    this.lastNetworkQuality = 'unknown';
   }
 
   /**
@@ -103,6 +106,134 @@ class WebRTCService {
 
     // Start collecting stats
     this.startStatsCollection();
+    
+    // Start adaptive quality adjustment
+    this.startAdaptiveQuality();
+  }
+  
+  /**
+   * Get video constraints based on current quality setting
+   */
+  getVideoConstraints() {
+    const constraints = {
+      facingMode: 'user'
+    };
+    
+    switch (this.currentVideoQuality) {
+      case 'high':
+        constraints.width = { ideal: 1280, max: 1920 };
+        constraints.height = { ideal: 720, max: 1080 };
+        constraints.frameRate = { ideal: 30, max: 30 };
+        break;
+      case 'medium':
+        constraints.width = { ideal: 640, max: 1280 };
+        constraints.height = { ideal: 480, max: 720 };
+        constraints.frameRate = { ideal: 24, max: 24 };
+        break;
+      case 'low':
+        constraints.width = { ideal: 320, max: 640 };
+        constraints.height = { ideal: 240, max: 480 };
+        constraints.frameRate = { ideal: 15, max: 15 };
+        break;
+      default:
+        constraints.width = { ideal: 640 };
+        constraints.height = { ideal: 480 };
+        constraints.frameRate = { ideal: 24 };
+    }
+    
+    return constraints;
+  }
+  
+  /**
+   * Start adaptive quality adjustment based on network conditions
+   */
+  startAdaptiveQuality() {
+    if (this.qualityAdjustmentInterval) {
+      clearInterval(this.qualityAdjustmentInterval);
+    }
+    
+    this.qualityAdjustmentInterval = setInterval(async () => {
+      if (!this.peerConnection || !this.localStream) return;
+      
+      try {
+        const stats = await this.peerConnection.getStats();
+        const statsData = this.parseStats(stats);
+        
+        // Adjust quality based on network conditions
+        this.adjustQualityBasedOnNetwork(statsData);
+      } catch (error) {
+        console.error('Error in adaptive quality adjustment:', error);
+      }
+    }, 5000); // Check every 5 seconds
+  }
+  
+  /**
+   * Adjust video quality based on network conditions
+   * High Quality (1280x720 @ 30fps) - ONLY for excellent network
+   */
+  adjustQualityBasedOnNetwork(statsData) {
+    const networkQuality = statsData.networkQuality;
+    const videoQuality = statsData.videoQuality;
+    
+    // Only adjust if network quality changed significantly
+    if (networkQuality === this.lastNetworkQuality) return;
+    
+    this.lastNetworkQuality = networkQuality;
+    
+    let newQuality = this.currentVideoQuality;
+    
+    // Adjust based on network quality
+    // High quality ONLY for excellent network + excellent video quality
+    if (networkQuality === 'excellent' && videoQuality === 'excellent') {
+      newQuality = 'high';
+    } else if (networkQuality === 'poor' || videoQuality === 'poor') {
+      newQuality = 'low';
+    } else if (networkQuality === 'fair' || videoQuality === 'fair') {
+      newQuality = 'medium';
+    } else if (networkQuality === 'good' || videoQuality === 'good') {
+      // Good network gets medium quality, NOT high
+      newQuality = 'medium';
+    } else {
+      // Default to medium for unknown/other cases
+      newQuality = 'medium';
+    }
+    
+    // Only change if quality actually changed
+    if (newQuality !== this.currentVideoQuality) {
+      this.setVideoQuality(newQuality);
+    }
+  }
+  
+  /**
+   * Set video quality and apply constraints
+   */
+  async setVideoQuality(quality) {
+    if (quality === this.currentVideoQuality) return;
+    
+    this.currentVideoQuality = quality;
+    
+    if (!this.localStream) return;
+    
+    const videoTrack = this.localStream.getVideoTracks()[0];
+    if (!videoTrack) return;
+    
+    try {
+      const constraints = this.getVideoConstraints();
+      await videoTrack.applyConstraints(constraints);
+      console.log(`Video quality adjusted to: ${quality}`, constraints);
+    } catch (error) {
+      console.error('Error applying video constraints:', error);
+    }
+  }
+  
+  /**
+   * Stop adaptive quality adjustment
+   */
+  stopAdaptiveQuality() {
+    if (this.qualityAdjustmentInterval) {
+      clearInterval(this.qualityAdjustmentInterval);
+      this.qualityAdjustmentInterval = null;
+    }
   }
 
   /**
@@ -305,12 +436,11 @@ class WebRTCService {
         // Still try, some browsers allow it
       }
 
+      // Adaptive quality based on current setting
+      const videoConstraints = this.getVideoConstraints();
+      
       this.localStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: 'user'
-        },
+        video: videoConstraints,
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -509,6 +639,9 @@ class WebRTCService {
   endCall() {
     // Stop stats collection
     this.stopStatsCollection();
+    
+    // Stop adaptive quality adjustment
+    this.stopAdaptiveQuality();
 
     // Stop recording BEFORE clearing callback
     // IMPORTANT: Don't clear onRecordingComplete here - let it process first
