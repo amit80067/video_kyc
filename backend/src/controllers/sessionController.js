@@ -14,7 +14,7 @@ class SessionController {
 
             // Generate unique session ID and join link
             const sessionId = uuidv4();
-            const joinLink = `${process.env.FRONTEND_URL || 'http://localhost:3005'}/join/${sessionId}`;
+            const joinLink = `${process.env.FRONTEND_URL || 'https://kyc.virtualinvestigation.xyz'}/join/${sessionId}`;
             
             // Link expires in 24 hours
             const linkExpiresAt = new Date();
@@ -29,23 +29,37 @@ class SessionController {
             );
 
             // Send SMS to user with verification link
+            let smsSent = false;
+            let smsError = null;
+            
             if (userPhone && smsService.isAvailable()) {
                 try {
-                    await smsService.sendVerificationSMS(userPhone, userName, joinLink);
-                    console.log(`SMS sent successfully to ${userPhone} for session ${sessionId}`);
-                } catch (smsError) {
+                    console.log(`Attempting to send SMS for session ${sessionId} to ${userPhone}`);
+                    const smsResult = await smsService.sendVerificationSMS(userPhone, userName, joinLink);
+                    smsSent = smsResult.success;
+                    console.log(`✅ SMS sent successfully to ${userPhone} for session ${sessionId}`);
+                } catch (smsErr) {
                     // Log error but don't fail the session creation
-                    console.error('Failed to send SMS:', smsError);
+                    smsError = smsErr.message || 'Unknown SMS error';
+                    console.error(`❌ Failed to send SMS to ${userPhone}:`, smsErr);
+                    console.error('SMS Error details:', {
+                        message: smsErr.message,
+                        stack: smsErr.stack
+                    });
                     // Session created successfully, just SMS failed
                 }
             } else if (userPhone && !smsService.isAvailable()) {
-                console.warn('SMS service not available. Twilio credentials missing.');
+                console.warn('⚠️ SMS service not available. Twilio credentials missing or not initialized.');
+                smsError = 'SMS service not available';
+            } else if (!userPhone) {
+                console.log('No phone number provided, skipping SMS');
             }
 
             res.status(201).json({
                 success: true,
                 session: result.rows[0],
-                smsSent: userPhone && smsService.isAvailable() ? true : false
+                smsSent: smsSent,
+                smsError: smsError || null
             });
         } catch (error) {
             console.error('Create session error:', error);
@@ -95,7 +109,7 @@ class SessionController {
     async getSessionByLink(req, res) {
         try {
             const { joinLink } = req.params;
-            const fullLink = `${process.env.FRONTEND_URL || 'http://localhost:3005'}/join/${joinLink}`;
+            const fullLink = `${process.env.FRONTEND_URL || 'https://kyc.virtualinvestigation.xyz'}/join/${joinLink}`;
 
             const result = await pool.query(
                 `SELECT s.*, 

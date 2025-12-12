@@ -34,7 +34,22 @@ class KYCController {
 
             // Upload to S3
             const s3Key = `documents/${sessionId}/${Date.now()}-${file.filename}`;
-            const uploadResult = await s3Service.uploadFile(file.path, s3Key);
+            let uploadResult;
+            try {
+                uploadResult = await s3Service.uploadFile(file.path, s3Key);
+            } catch (s3Error) {
+                console.error('S3 upload failed:', s3Error);
+                console.error('S3 error details:', {
+                    message: s3Error.message,
+                    code: s3Error.code,
+                    statusCode: s3Error.statusCode
+                });
+                // Clean up local file
+                if (fs.existsSync(file.path)) {
+                    fs.unlinkSync(file.path);
+                }
+                throw new Error(`S3 upload failed: ${s3Error.message}`);
+            }
 
             // Save to database
             const result = await pool.query(
@@ -114,7 +129,24 @@ class KYCController {
             });
         } catch (error) {
             console.error('Upload document error:', error);
-            res.status(500).json({ error: 'Failed to upload document' });
+            console.error('Error stack:', error.stack);
+            
+            // Clean up file if it exists
+            if (req.file && req.file.path && fs.existsSync(req.file.path)) {
+                try {
+                    fs.unlinkSync(req.file.path);
+                } catch (cleanupError) {
+                    console.error('Failed to cleanup file:', cleanupError);
+                }
+            }
+            
+            // Return detailed error for debugging
+            const errorMessage = error.message || 'Failed to upload document';
+            res.status(500).json({ 
+                error: 'Failed to upload document',
+                details: process.env.NODE_ENV === 'development' ? errorMessage : undefined,
+                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            });
         }
     }
 

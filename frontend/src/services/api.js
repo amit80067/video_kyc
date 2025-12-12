@@ -4,8 +4,22 @@ import axios from 'axios';
 // Or use environment variable if set
 const API_URL = process.env.REACT_APP_API_URL || '';
 
+// Ensure API_URL is properly configured
+let baseURL = '/api';
+if (API_URL) {
+  // If API_URL already ends with /api, use it as is
+  // Otherwise, if it's a full URL, append /api
+  if (API_URL.endsWith('/api')) {
+    baseURL = API_URL;
+  } else if (API_URL.startsWith('http')) {
+    baseURL = `${API_URL}/api`;
+  } else {
+    baseURL = API_URL;
+  }
+}
+
 const api = axios.create({
-  baseURL: API_URL || '/api', // Use relative URL - nginx will proxy
+  baseURL: baseURL,
   headers: {
     'Content-Type': 'application/json',
   },

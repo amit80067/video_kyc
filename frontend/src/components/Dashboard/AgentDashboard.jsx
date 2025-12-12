@@ -163,8 +163,8 @@ const AgentDashboard = () => {
         // Handle existing users - if user already joined, create offer
         webrtcService.socket.on('existing-users', (users) => {
           console.log('Existing users in room:', users);
-          if (users.length > 0) {
-            // User already in room, create offer
+          if (users.length > 0 && !webrtcService.peerConnection) {
+            // User already in room, create offer only if no connection exists
             setTimeout(() => {
               webrtcService.createOffer();
             }, 500);
@@ -174,8 +174,8 @@ const AgentDashboard = () => {
         // Handle user joined - if user joins after agent, create offer
         webrtcService.socket.on('user-joined', (data) => {
           console.log('User joined room:', data);
-          // If user joins after agent, create offer
-          if (data.userType === 'user') {
+          // If user joins after agent, create offer only if no connection exists
+          if (data.userType === 'user' && !webrtcService.peerConnection) {
             setTimeout(() => {
               webrtcService.createOffer();
             }, 500);
@@ -186,9 +186,11 @@ const AgentDashboard = () => {
       // Join room
       webrtcService.joinRoom(session.session_id, 'agent');
       
-      // Create offer after joining (in case user already joined)
+      // Create offer after joining (in case user already joined) - only if no connection
       setTimeout(() => {
-        webrtcService.createOffer();
+        if (!webrtcService.peerConnection) {
+          webrtcService.createOffer();
+        }
       }, 1000);
 
       // Start recording automatically

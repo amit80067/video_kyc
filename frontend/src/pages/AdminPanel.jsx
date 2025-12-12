@@ -185,18 +185,18 @@ const AdminPanel = () => {
     
     // India (+91) validation
     if (code === '+91') {
-      // Check if it starts with 0
-      if (cleanPhone.startsWith('0')) {
-        const digits = cleanPhone.substring(1);
-        if (digits.length === 10 && /^[6-9]\d{9}$/.test(digits)) {
-          return '';
-        }
-        return 'Invalid mobile number. 10-digit Indian mobile number enter karein (6-9 se start hona chahiye)';
-      }
-      // Check if it's a 10-digit number starting with 6-9
-      if (cleanPhone.length === 10 && /^[6-9]\d{9}$/.test(cleanPhone)) {
+    // Check if it starts with 0
+    if (cleanPhone.startsWith('0')) {
+      const digits = cleanPhone.substring(1);
+      if (digits.length === 10 && /^[6-9]\d{9}$/.test(digits)) {
         return '';
       }
+        return 'Invalid mobile number. 10-digit Indian mobile number enter karein (6-9 se start hona chahiye)';
+    }
+    // Check if it's a 10-digit number starting with 6-9
+    if (cleanPhone.length === 10 && /^[6-9]\d{9}$/.test(cleanPhone)) {
+      return '';
+    }
       return 'Invalid mobile number. 10-digit Indian mobile number enter karein (6-9 se start hona chahiye)';
     }
     
@@ -538,10 +538,10 @@ const AdminPanel = () => {
                     </MenuItem>
                   ))}
                 </TextField>
-                <TextField
-                  label="User Phone *"
-                  value={newSession.userPhone}
-                  onChange={(e) => {
+              <TextField
+                label="User Phone *"
+                value={newSession.userPhone}
+                onChange={(e) => {
                     const phoneValue = e.target.value;
                     setNewSession({ ...newSession, userPhone: phoneValue });
                     // Real-time validation - validate as user types
@@ -549,19 +549,19 @@ const AdminPanel = () => {
                       const error = validatePhone(phoneValue, countryCode);
                       setValidationErrors({ ...validationErrors, userPhone: error });
                     } else {
-                      setValidationErrors({ ...validationErrors, userPhone: '' });
-                    }
-                  }}
-                  onBlur={(e) => {
+                    setValidationErrors({ ...validationErrors, userPhone: '' });
+                  }
+                }}
+                onBlur={(e) => {
                     // Validate on blur to ensure final check
                     const error = validatePhone(e.target.value, countryCode);
-                    setValidationErrors({ ...validationErrors, userPhone: error });
-                  }}
-                  fullWidth
-                  required
-                  error={!!validationErrors.userPhone}
+                  setValidationErrors({ ...validationErrors, userPhone: error });
+                }}
+                fullWidth
+                required
+                error={!!validationErrors.userPhone}
                   helperText={validationErrors.userPhone || (countryCode === '+91' ? '10-digit Indian mobile number enter karein (e.g., 9876543210)' : 'Mobile number enter karein')}
-                />
+              />
               </Box>
               <TextField
                 label="User Email"

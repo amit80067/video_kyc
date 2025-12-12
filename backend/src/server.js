@@ -8,28 +8,56 @@ const app = express();
 const server = http.createServer(app);
 
 // Socket.io setup with CORS
+const frontendUrlForSocket = process.env.FRONTEND_URL || "https://kyc.virtualinvestigation.xyz";
 const io = socketIo(server, {
     cors: {
-        origin: process.env.FRONTEND_URL || "http://localhost:3005",
+        origin: [
+            'https://kyc.virtualinvestigation.xyz',
+            'http://kyc.virtualinvestigation.xyz',
+            'https://backend.virtualinvestigation.xyz',
+            'http://backend.virtualinvestigation.xyz',
+            'http://localhost:3000',
+            'http://localhost:3005',
+            frontendUrlForSocket
+        ],
         methods: ["GET", "POST"],
         credentials: true
     }
 });
 
 // Middleware - CORS configuration
+const frontendUrl = process.env.FRONTEND_URL || 'https://kyc.virtualinvestigation.xyz';
 const corsOptions = {
-    origin: [
-        'http://localhost:3000',
-        'http://localhost:3005',
-        'http://13.50.109.232',
-        'http://13.50.109.232:3000',
-        'http://13.50.109.232:8005',
-        /^http:\/\/13\.50\.109\.232/,
-        /^http:\/\/localhost/
-    ],
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        
+        const allowedOrigins = [
+            'https://kyc.virtualinvestigation.xyz',
+            'http://kyc.virtualinvestigation.xyz',
+            'https://backend.virtualinvestigation.xyz',
+            'http://backend.virtualinvestigation.xyz',
+            'http://localhost:3000',
+            'http://localhost:3005',
+            'http://localhost:8005',
+            frontendUrl
+        ];
+        
+        // Check if origin is in allowed list or matches patterns
+        if (allowedOrigins.includes(origin) || 
+            /^http:\/\/localhost(:\d+)?$/.test(origin) ||
+            /^https?:\/\/kyc\.virtualinvestigation\.xyz(:\d+)?$/.test(origin) ||
+            /^https?:\/\/backend\.virtualinvestigation\.xyz(:\d+)?$/.test(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+    exposedHeaders: ['Content-Range', 'X-Content-Range'],
+    maxAge: 86400 // 24 hours
 };
 
 app.use(cors(corsOptions));
@@ -50,6 +78,16 @@ app.use('/api/export', exportRoutes);
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// 404 handler for undefined routes
+app.use((req, res) => {
+    res.status(404).json({ 
+        error: 'Route not found',
+        path: req.path,
+        method: req.method,
+        message: `The endpoint ${req.method} ${req.path} does not exist`
+    });
 });
 
 // WebRTC Signaling - Socket.io handlers

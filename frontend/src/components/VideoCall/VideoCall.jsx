@@ -44,6 +44,8 @@ const VideoCall = ({
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [micEnabled, setMicEnabled] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenVideo, setFullscreenVideo] = useState(null); // 'local' or 'remote' or null
+  const [mainVideo, setMainVideo] = useState('remote'); // 'local' or 'remote' - which video is main (big)
   
   // Call quality states
   const [networkQuality, setNetworkQuality] = useState('unknown');
@@ -181,17 +183,53 @@ const VideoCall = ({
     }
   };
 
+  // Handle video click to swap main and small video
+  const handleVideoClick = (videoType) => {
+    // If clicking on small video, swap it with main video
+    if (mainVideo !== videoType) {
+      // Swap videos - clicked video becomes main
+      setMainVideo(videoType);
+      setFullscreenVideo(null);
+      setIsFullscreen(false);
+    } else {
+      // If clicking on main video, make it fullscreen
+      const videoElement = videoType === 'local' ? localVideoRef.current : remoteVideoRef.current;
+      if (!videoElement) return;
+
+      if (fullscreenVideo === videoType) {
+        // Exit fullscreen
+        if (document.exitFullscreen) {
+          document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+          document.webkitExitFullscreen();
+        } else if (document.msExitFullscreen) {
+          document.msExitFullscreen();
+        }
+        setFullscreenVideo(null);
+        setIsFullscreen(false);
+      } else {
+        // Enter fullscreen
+        if (videoElement.requestFullscreen) {
+          videoElement.requestFullscreen();
+        } else if (videoElement.webkitRequestFullscreen) {
+          videoElement.webkitRequestFullscreen();
+        } else if (videoElement.mozRequestFullScreen) {
+          videoElement.mozRequestFullScreen();
+        } else if (videoElement.msRequestFullscreen) {
+          videoElement.msRequestFullscreen();
+        }
+        setFullscreenVideo(videoType);
+        setIsFullscreen(true);
+      }
+    }
+  };
+
   const toggleFullscreen = () => {
     if (!isFullscreen) {
-      if (document.documentElement.requestFullscreen) {
-        document.documentElement.requestFullscreen();
-      } else if (document.documentElement.webkitRequestFullscreen) {
-        document.documentElement.webkitRequestFullscreen();
-      } else if (document.documentElement.msRequestFullscreen) {
-        document.documentElement.msRequestFullscreen();
-      }
-      setIsFullscreen(true);
+      // Fullscreen the remote video by default
+      handleVideoClick('remote');
     } else {
+      // Exit fullscreen
       if (document.exitFullscreen) {
         document.exitFullscreen();
       } else if (document.webkitExitFullscreen) {
@@ -199,177 +237,233 @@ const VideoCall = ({
       } else if (document.msExitFullscreen) {
         document.msExitFullscreen();
       }
+      setFullscreenVideo(null);
       setIsFullscreen(false);
     }
   };
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement || !!document.webkitFullscreenElement || !!document.msFullscreenElement);
+      const isCurrentlyFullscreen = !!(
+        document.fullscreenElement || 
+        document.webkitFullscreenElement || 
+        document.msFullscreenElement ||
+        document.mozFullScreenElement
+      );
+      
+      setIsFullscreen(isCurrentlyFullscreen);
+      
+      // If exited fullscreen, reset state
+      if (!isCurrentlyFullscreen) {
+        setFullscreenVideo(null);
+      }
     };
 
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
     document.addEventListener('msfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
 
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
       document.removeEventListener('msfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
     };
   }, []);
 
+  // Determine which video is main (big) and which is small (corner)
+  const isRemoteMain = mainVideo === 'remote';
+  const MainVideo = isRemoteMain ? remoteVideoRef : localVideoRef;
+  const SmallVideo = isRemoteMain ? localVideoRef : remoteVideoRef;
+  const mainUserName = isRemoteMain ? remoteUserName : localUserName;
+  const smallUserName = isRemoteMain ? localUserName : remoteUserName;
+  const mainStream = isRemoteMain ? remoteStream : localStream;
+  const smallStream = isRemoteMain ? localStream : remoteStream;
+
   return (
-    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', bgcolor: '#000' }}>
-      <Grid container spacing={1} sx={{ flex: 1, p: 1, height: 'calc(100vh - 80px)' }}>
-        {/* Remote Video (Main Screen) */}
-        <Grid item xs={12} sx={{ height: '100%' }}>
-          <Paper
+    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', bgcolor: '#000', position: 'relative' }}>
+      {/* Main Video (Full Screen) */}
+      <Box
+        sx={{
+          position: 'relative',
+          width: '100%',
+          height: 'calc(100vh - 80px)',
+          backgroundColor: '#000',
+          cursor: 'pointer',
+          '&:hover': {
+            '&::after': {
+              content: '"Click to fullscreen"',
+              position: 'absolute',
+              bottom: 20,
+              right: 20,
+              backgroundColor: 'rgba(0, 0, 0, 0.7)',
+              color: 'white',
+              px: 2,
+              py: 1,
+              borderRadius: 1,
+              fontSize: '12px',
+            },
+          },
+        }}
+        onClick={() => handleVideoClick(mainVideo)}
+      >
+        <video
+          ref={MainVideo}
+          autoPlay
+          playsInline
+          muted={!isRemoteMain}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+          }}
+        />
+        {!mainStream && (
+          <Box
             sx={{
-              position: 'relative',
-              height: '100%',
-              backgroundColor: '#000',
-              borderRadius: 2,
-              overflow: 'hidden',
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              color: 'white',
             }}
           >
-            <video
-              ref={remoteVideoRef}
-              autoPlay
-              playsInline
-              style={{
-                width: '100%',
-                height: '100%',
-                objectFit: 'cover',
-              }}
-            />
-            {!remoteStream && (
-              <Box
-                sx={{
-                  position: 'absolute',
-                  top: '50%',
-                  left: '50%',
-                  transform: 'translate(-50%, -50%)',
-                  color: 'white',
-                }}
-              >
-                <Typography>Waiting for {remoteUserName} to join...</Typography>
-              </Box>
-            )}
-            {/* Remote User Name Overlay */}
-            <Box
-              sx={{
-                position: 'absolute',
-                bottom: 16,
-                left: 16,
-                backgroundColor: 'rgba(0, 0, 0, 0.7)',
-                color: 'white',
-                px: 2,
-                py: 1,
-                borderRadius: 2,
-              }}
-            >
-              <Typography variant="body1" fontWeight="bold">
-                {remoteUserName}
-              </Typography>
-            </Box>
+            <Typography>Waiting for {mainUserName} to join...</Typography>
+          </Box>
+        )}
+        {/* Main User Name Overlay */}
+        <Box
+          sx={{
+            position: 'absolute',
+            bottom: 16,
+            left: 16,
+            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+            color: 'white',
+            px: 2,
+            py: 1,
+            borderRadius: 2,
+          }}
+        >
+          <Typography variant="body1" fontWeight="bold">
+            {mainUserName}
+          </Typography>
+        </Box>
 
-            {/* Call Quality Indicators */}
-            <Box
-              sx={{
-                position: 'absolute',
-                top: 16,
-                right: 16,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 1,
-                zIndex: 10,
-              }}
-            >
-              {/* Network Quality */}
-              <Chip
-                icon={getNetworkIcon(networkQuality)}
-                label={`Network: ${networkQuality}`}
-                color={getQualityColor(networkQuality)}
-                size="small"
-                sx={{ backgroundColor: 'rgba(0, 0, 0, 0.7)', color: 'white' }}
-              />
-              
-              {/* Audio Quality */}
-              <Chip
-                icon={<Mic />}
-                label={`Audio: ${audioQuality}`}
-                color={getQualityColor(audioQuality)}
-                size="small"
-                sx={{ backgroundColor: 'rgba(0, 0, 0, 0.7)', color: 'white' }}
-              />
-              
-              {/* Video Quality */}
-              <Chip
-                icon={<Videocam />}
-                label={`Video: ${videoQuality}`}
-                color={getQualityColor(videoQuality)}
-                size="small"
-                sx={{ backgroundColor: 'rgba(0, 0, 0, 0.7)', color: 'white' }}
-              />
-              
-              {/* Connection State */}
-              <Chip
-                label={`Connection: ${connectionState}`}
-                color={connectionState === 'connected' ? 'success' : 'warning'}
-                size="small"
-                sx={{ backgroundColor: 'rgba(0, 0, 0, 0.7)', color: 'white' }}
-              />
-            </Box>
-          </Paper>
-        </Grid>
-
-        {/* Local Video (Small Picture-in-Picture) */}
-        <Grid item xs={12} sm={4} md={3} sx={{ position: 'absolute', bottom: 80, right: 16, zIndex: 1000 }}>
-          <Paper
+        {/* Call Quality Indicators - Only on remote when it's main */}
+        {isRemoteMain && (
+          <Box
             sx={{
-              position: 'relative',
-              paddingTop: '75%', // 4:3 aspect ratio
-              backgroundColor: '#000',
-              borderRadius: 2,
-              overflow: 'hidden',
-              boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+              position: 'absolute',
+              top: 16,
+              right: 16,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 1,
+              zIndex: 10,
             }}
           >
-            <video
-              ref={localVideoRef}
-              autoPlay
-              playsInline
-              muted
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '100%',
-                objectFit: 'cover',
-              }}
+            <Chip
+              icon={getNetworkIcon(networkQuality)}
+              label={`Network: ${networkQuality}`}
+              color={getQualityColor(networkQuality)}
+              size="small"
+              sx={{ backgroundColor: 'rgba(0, 0, 0, 0.7)', color: 'white' }}
             />
-            {/* Local User Name Overlay */}
-            <Box
-              sx={{
-                position: 'absolute',
-                bottom: 8,
-                left: 8,
-                backgroundColor: 'rgba(0, 0, 0, 0.7)',
-                color: 'white',
-                px: 1.5,
-                py: 0.5,
-                borderRadius: 1,
-              }}
-            >
-              <Typography variant="caption" fontWeight="bold">
-                {localUserName}
-              </Typography>
-            </Box>
-          </Paper>
-        </Grid>
-      </Grid>
+            <Chip
+              icon={<Mic />}
+              label={`Audio: ${audioQuality}`}
+              color={getQualityColor(audioQuality)}
+              size="small"
+              sx={{ backgroundColor: 'rgba(0, 0, 0, 0.7)', color: 'white' }}
+            />
+            <Chip
+              icon={<Videocam />}
+              label={`Video: ${videoQuality}`}
+              color={getQualityColor(videoQuality)}
+              size="small"
+              sx={{ backgroundColor: 'rgba(0, 0, 0, 0.7)', color: 'white' }}
+            />
+            <Chip
+              label={`Connection: ${connectionState}`}
+              color={connectionState === 'connected' ? 'success' : 'warning'}
+              size="small"
+              sx={{ backgroundColor: 'rgba(0, 0, 0, 0.7)', color: 'white' }}
+            />
+          </Box>
+        )}
+      </Box>
+
+      {/* Small Video (Picture-in-Picture - Top Right Corner) */}
+      <Paper
+        sx={{
+          position: 'absolute',
+          top: 16,
+          right: 16,
+          width: { xs: '120px', sm: '180px', md: '240px' },
+          aspectRatio: '4/3',
+          backgroundColor: '#000',
+          borderRadius: 2,
+          overflow: 'hidden',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.8)',
+          cursor: 'pointer',
+          zIndex: 1000,
+          '&:hover': {
+            boxShadow: '0 0 30px rgba(255,255,255,0.5)',
+            transform: 'scale(1.05)',
+            transition: 'all 0.2s',
+          },
+        }}
+        onClick={() => handleVideoClick(isRemoteMain ? 'local' : 'remote')}
+      >
+        <video
+          ref={SmallVideo}
+          autoPlay
+          playsInline
+          muted={isRemoteMain}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+          }}
+        />
+        {/* Small User Name Overlay */}
+        <Box
+          sx={{
+            position: 'absolute',
+            bottom: 8,
+            left: 8,
+            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+            color: 'white',
+            px: 1.5,
+            py: 0.5,
+            borderRadius: 1,
+          }}
+        >
+          <Typography variant="caption" fontWeight="bold">
+            {smallUserName}
+          </Typography>
+        </Box>
+        
+        {/* Click hint */}
+        <Box
+          sx={{
+            position: 'absolute',
+            top: 8,
+            right: 8,
+            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+            color: 'white',
+            px: 1,
+            py: 0.5,
+            borderRadius: 1,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 0.5,
+          }}
+        >
+          <Fullscreen sx={{ fontSize: 12 }} />
+        </Box>
+      </Paper>
 
       {/* Controls - Fixed at bottom */}
       <Box

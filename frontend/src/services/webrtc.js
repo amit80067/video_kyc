@@ -362,30 +362,77 @@ class WebRTCService {
   setupWebRTCHandlers() {
     // Handle offer
     this.socket.on('offer', async (data) => {
-      if (!this.peerConnection) {
-        await this.setupPeerConnection();
+      try {
+        if (!this.peerConnection) {
+          await this.setupPeerConnection();
+        }
+
+        // Check connection state before setting remote description
+        if (this.peerConnection.signalingState === 'stable' || 
+            this.peerConnection.signalingState === 'have-local-offer') {
+          // Only set remote description if in correct state
+          if (this.peerConnection.signalingState === 'stable') {
+            await this.peerConnection.setRemoteDescription(
+              new RTCSessionDescription(data.offer)
+            );
+          } else {
+            console.warn('Cannot set remote description, current state:', this.peerConnection.signalingState);
+            return;
+          }
+        } else {
+          await this.peerConnection.setRemoteDescription(
+            new RTCSessionDescription(data.offer)
+          );
+        }
+
+        // Create and set answer only if in correct state
+        if (this.peerConnection.signalingState === 'have-remote-offer') {
+          const answer = await this.peerConnection.createAnswer();
+          await this.peerConnection.setLocalDescription(answer);
+
+          this.socket.emit('answer', {
+            answer: answer,
+            roomId: this.roomId,
+            targetSocketId: data.socketId,
+          });
+        }
+      } catch (error) {
+        console.error('Error handling offer:', error);
+        // If error, try to reset connection
+        if (error.name === 'InvalidStateError') {
+          console.log('Invalid state error, resetting peer connection');
+          if (this.peerConnection) {
+            this.peerConnection.close();
+            this.peerConnection = null;
+          }
+          // Retry after a short delay
+          setTimeout(async () => {
+            if (!this.peerConnection) {
+              await this.setupPeerConnection();
+            }
+          }, 1000);
+        }
       }
-
-      await this.peerConnection.setRemoteDescription(
-        new RTCSessionDescription(data.offer)
-      );
-
-      const answer = await this.peerConnection.createAnswer();
-      await this.peerConnection.setLocalDescription(answer);
-
-      this.socket.emit('answer', {
-        answer: answer,
-        roomId: this.roomId,
-        targetSocketId: data.socketId,
-      });
     });
 
     // Handle answer
     this.socket.on('answer', async (data) => {
-      if (this.peerConnection) {
-        await this.peerConnection.setRemoteDescription(
-          new RTCSessionDescription(data.answer)
-        );
+      try {
+        if (this.peerConnection) {
+          // Check connection state before setting remote description
+          if (this.peerConnection.signalingState === 'have-local-offer') {
+            await this.peerConnection.setRemoteDescription(
+              new RTCSessionDescription(data.answer)
+            );
+          } else {
+            console.warn('Cannot set remote answer, current state:', this.peerConnection.signalingState);
+          }
+        }
+      } catch (error) {
+        console.error('Error handling answer:', error);
+        if (error.name === 'InvalidStateError') {
+          console.log('Invalid state error in answer handler');
+        }
       }
     });
 
@@ -483,17 +530,46 @@ class WebRTCService {
    * Create offer for WebRTC connection
    */
   async createOffer() {
-    if (!this.peerConnection) {
-      await this.setupPeerConnection();
+    try {
+      if (!this.peerConnection) {
+        await this.setupPeerConnection();
+      }
+
+      // Check if already in a state where we can create offer
+      if (this.peerConnection.signalingState !== 'stable') {
+        console.warn('Cannot create offer, current state:', this.peerConnection.signalingState);
+        return;
+      }
+
+      const offer = await this.peerConnection.createOffer();
+      
+      // Set local description only if still in stable state
+      if (this.peerConnection.signalingState === 'stable') {
+        await this.peerConnection.setLocalDescription(offer);
+
+        this.socket.emit('offer', {
+          offer: offer,
+          roomId: this.roomId,
+        });
+      } else {
+        console.warn('State changed before setting local description');
+      }
+    } catch (error) {
+      console.error('Error creating offer:', error);
+      if (error.name === 'InvalidStateError') {
+        console.log('Invalid state error in createOffer, resetting connection');
+        if (this.peerConnection) {
+          this.peerConnection.close();
+          this.peerConnection = null;
+        }
+        // Retry after a short delay
+        setTimeout(async () => {
+          if (!this.peerConnection) {
+            await this.setupPeerConnection();
+          }
+        }, 1000);
+      }
     }
-
-    const offer = await this.peerConnection.createOffer();
-    await this.peerConnection.setLocalDescription(offer);
-
-    this.socket.emit('offer', {
-      offer: offer,
-      roomId: this.roomId,
-    });
   }
 
   /**
