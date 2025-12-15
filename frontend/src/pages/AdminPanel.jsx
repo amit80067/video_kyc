@@ -20,6 +20,9 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  Tabs,
+  Tab,
+  Alert,
 } from '@mui/material';
 import {
   Download,
@@ -28,6 +31,8 @@ import {
   PictureAsPdf,
   TableChart,
   Add,
+  PersonAdd,
+  People,
 } from '@mui/icons-material';
 import api from '../services/api';
 
@@ -51,6 +56,21 @@ const AdminPanel = () => {
     userPhone: '',
     userEmail: '',
   });
+  // Agent management state
+  const [agents, setAgents] = useState([]);
+  const [agentsLoading, setAgentsLoading] = useState(false);
+  const [openAgentDialog, setOpenAgentDialog] = useState(false);
+  const [newAgent, setNewAgent] = useState({
+    username: '',
+    password: '',
+    fullName: '',
+  });
+  const [agentErrors, setAgentErrors] = useState({
+    username: '',
+    password: '',
+  });
+  const [agentSuccess, setAgentSuccess] = useState('');
+  const [activeTab, setActiveTab] = useState(0);
 
   // Common country codes
   const countryCodes = [
@@ -105,12 +125,15 @@ const AdminPanel = () => {
         const user = JSON.parse(userStr);
         if (user.role === 'admin') {
           loadSessions();
+          if (activeTab === 1) {
+            loadAgents();
+          }
         }
       } catch (err) {
         console.error('Error parsing user data:', err);
       }
     }
-  }, [filters]);
+  }, [filters, activeTab]);
 
   const loadSessions = async () => {
     try {
@@ -360,32 +383,131 @@ const AdminPanel = () => {
     return colors[status] || 'default';
   };
 
+  // Agent management functions
+  const loadAgents = async () => {
+    try {
+      setAgentsLoading(true);
+      const response = await api.get('/auth/agents');
+      setAgents(response.data.agents);
+      setAgentsLoading(false);
+    } catch (err) {
+      console.error('Failed to load agents:', err);
+      setAgentsLoading(false);
+    }
+  };
+
+  const validateAgentUsername = (username) => {
+    if (!username || username.trim() === '') {
+      return 'Username required hai';
+    }
+    const trimmedUsername = username.trim();
+    
+    // Username should be 3-30 characters, alphanumeric and underscore only
+    if (trimmedUsername.length < 3 || trimmedUsername.length > 30) {
+      return 'Username 3 se 30 characters ke beech mein hona chahiye';
+    }
+    
+    const usernameRegex = /^[a-zA-Z0-9_]+$/;
+    if (!usernameRegex.test(trimmedUsername)) {
+      return 'Username mein sirf letters, numbers aur underscore allowed hai';
+    }
+    
+    return '';
+  };
+
+  const validateAgentPassword = (password) => {
+    if (!password || password.trim() === '') {
+      return 'Password required hai';
+    }
+    if (password.length < 6) {
+      return 'Password at least 6 characters hona chahiye';
+    }
+    return '';
+  };
+
+  const handleCreateAgent = async () => {
+    const usernameError = validateAgentUsername(newAgent.username);
+    const passwordError = validateAgentPassword(newAgent.password);
+    
+    setAgentErrors({
+      username: usernameError,
+      password: passwordError,
+    });
+
+    if (usernameError || passwordError) {
+      return;
+    }
+
+    try {
+      const response = await api.post('/auth/agents', {
+        username: newAgent.username.trim(),
+        password: newAgent.password,
+        fullName: newAgent.fullName.trim() || null,
+      });
+      
+      setAgentSuccess(`Agent successfully created! Username: ${response.data.agent.username}`);
+      setOpenAgentDialog(false);
+      setNewAgent({ username: '', password: '', fullName: '' });
+      setAgentErrors({ username: '', password: '' });
+      loadAgents();
+      
+      // Clear success message after 5 seconds
+      setTimeout(() => setAgentSuccess(''), 5000);
+    } catch (err) {
+      const errorMsg = err.response?.data?.error || 'Failed to create agent';
+      setAgentErrors({
+        username: errorMsg.includes('username') ? errorMsg : '',
+        password: errorMsg.includes('password') ? errorMsg : '',
+      });
+    }
+  };
+
   return (
     <Container maxWidth="xl">
       <Box sx={{ mt: 2, mb: 2 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
           <Typography variant="h4">Admin Dashboard</Typography>
           <Box>
-            <Button
-              variant="contained"
-              color="primary"
-              startIcon={<Add />}
-              onClick={() => setOpenDialog(true)}
-              sx={{ mr: 1 }}
-            >
-              Create Session
-            </Button>
-            <Button
-              variant="contained"
-              startIcon={<TableChart />}
-              onClick={handleExportExcel}
-              sx={{ mr: 1 }}
-            >
-              Export Excel
-            </Button>
-            <IconButton onClick={loadSessions} color="primary">
-              <Refresh />
-            </IconButton>
+            {activeTab === 0 && (
+              <>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  startIcon={<Add />}
+                  onClick={() => setOpenDialog(true)}
+                  sx={{ mr: 1 }}
+                >
+                  Create Session
+                </Button>
+                <Button
+                  variant="contained"
+                  startIcon={<TableChart />}
+                  onClick={handleExportExcel}
+                  sx={{ mr: 1 }}
+                >
+                  Export Excel
+                </Button>
+                <IconButton onClick={loadSessions} color="primary">
+                  <Refresh />
+                </IconButton>
+              </>
+            )}
+            {activeTab === 1 && (
+              <>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  startIcon={<PersonAdd />}
+                  onClick={() => setOpenAgentDialog(true)}
+                  sx={{ mr: 1 }}
+                >
+                  Add Agent
+                </Button>
+                <IconButton onClick={loadAgents} color="primary">
+                  <Refresh />
+                </IconButton>
+              </>
+            )}
             <Button
               variant="outlined"
               startIcon={<Logout />}
@@ -397,110 +519,182 @@ const AdminPanel = () => {
           </Box>
         </Box>
 
-        {/* Filters */}
-        <Paper elevation={2} sx={{ p: 2, mb: 2 }}>
-          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-            <TextField
-              select
-              label="Status"
-              value={filters.status}
-              onChange={(e) => setFilters({ ...filters, status: e.target.value })}
-              sx={{ minWidth: 150 }}
-            >
-              <MenuItem value="">All</MenuItem>
-              <MenuItem value="pending">Pending</MenuItem>
-              <MenuItem value="in_progress">In Progress</MenuItem>
-              <MenuItem value="completed">Completed</MenuItem>
-              <MenuItem value="rejected">Rejected</MenuItem>
-            </TextField>
-
-            <TextField
-              type="date"
-              label="Start Date"
-              value={filters.startDate}
-              onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}
-              InputLabelProps={{ shrink: true }}
-            />
-
-            <TextField
-              type="date"
-              label="End Date"
-              value={filters.endDate}
-              onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
-              InputLabelProps={{ shrink: true }}
-            />
-          </Box>
+        {/* Tabs */}
+        <Paper elevation={2} sx={{ mb: 2 }}>
+          <Tabs value={activeTab} onChange={(e, newValue) => setActiveTab(newValue)}>
+            <Tab icon={<TableChart />} label="Sessions" />
+            <Tab icon={<People />} label="Agents" />
+          </Tabs>
         </Paper>
 
-        <TableContainer component={Paper}>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>Session ID</TableCell>
-                <TableCell>User Name</TableCell>
-                <TableCell>User Phone</TableCell>
-                <TableCell>Agent</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Created At</TableCell>
-                <TableCell>Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {sessions.length === 0 ? (
+        {agentSuccess && (
+          <Alert severity="success" sx={{ mb: 2 }} onClose={() => setAgentSuccess('')}>
+            {agentSuccess}
+          </Alert>
+        )}
+
+        {/* Sessions Tab */}
+        {activeTab === 0 && (
+          <>
+
+            {/* Filters */}
+            <Paper elevation={2} sx={{ p: 2, mb: 2 }}>
+              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                <TextField
+                  select
+                  label="Status"
+                  value={filters.status}
+                  onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+                  sx={{ minWidth: 150 }}
+                >
+                  <MenuItem value="">All</MenuItem>
+                  <MenuItem value="pending">Pending</MenuItem>
+                  <MenuItem value="in_progress">In Progress</MenuItem>
+                  <MenuItem value="completed">Completed</MenuItem>
+                  <MenuItem value="rejected">Rejected</MenuItem>
+                </TextField>
+
+                <TextField
+                  type="date"
+                  label="Start Date"
+                  value={filters.startDate}
+                  onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}
+                  InputLabelProps={{ shrink: true }}
+                />
+
+                <TextField
+                  type="date"
+                  label="End Date"
+                  value={filters.endDate}
+                  onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
+                  InputLabelProps={{ shrink: true }}
+                />
+              </Box>
+            </Paper>
+
+            <TableContainer component={Paper}>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Session ID</TableCell>
+                    <TableCell>User Name</TableCell>
+                    <TableCell>User Phone</TableCell>
+                    <TableCell>Agent</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell>Created At</TableCell>
+                    <TableCell>Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {sessions.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={7} align="center">
+                        No sessions found
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    sessions.map((session) => (
+                      <TableRow key={session.id}>
+                        <TableCell>{session.session_id}</TableCell>
+                        <TableCell>{session.user_name || 'N/A'}</TableCell>
+                        <TableCell>{session.user_phone || 'N/A'}</TableCell>
+                        <TableCell>{session.agent_name || session.agent_username || 'N/A'}</TableCell>
+                        <TableCell>
+                          <Chip
+                            label={session.status}
+                            color={getStatusColor(session.status)}
+                            size="small"
+                          />
+                        </TableCell>
+                        <TableCell>
+                          {new Date(session.created_at).toLocaleString()}
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            onClick={() => handleViewSession(session)}
+                            sx={{ mr: 1 }}
+                          >
+                            View
+                          </Button>
+                          {session.recording_count > 0 ? (
+                            <IconButton
+                              color="primary"
+                              onClick={() => handleExportPDF(session.session_id)}
+                              title="Export PDF"
+                            >
+                              <PictureAsPdf />
+                            </IconButton>
+                          ) : (
+                            <IconButton
+                              disabled
+                              title="PDF available after video recording upload"
+                            >
+                              <PictureAsPdf style={{ opacity: 0.3 }} />
+                            </IconButton>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </>
+        )}
+
+        {/* Agents Tab */}
+        {activeTab === 1 && (
+          <TableContainer component={Paper}>
+            <Table>
+              <TableHead>
                 <TableRow>
-                  <TableCell colSpan={7} align="center">
-                    No sessions found
-                  </TableCell>
+                  <TableCell>ID</TableCell>
+                  <TableCell>Username</TableCell>
+                  <TableCell>Email</TableCell>
+                  <TableCell>Full Name</TableCell>
+                  <TableCell>Status</TableCell>
+                  <TableCell>Created At</TableCell>
                 </TableRow>
-              ) : (
-                sessions.map((session) => (
-                  <TableRow key={session.id}>
-                    <TableCell>{session.session_id}</TableCell>
-                    <TableCell>{session.user_name || 'N/A'}</TableCell>
-                    <TableCell>{session.user_phone || 'N/A'}</TableCell>
-                    <TableCell>{session.agent_name || session.agent_username || 'N/A'}</TableCell>
-                    <TableCell>
-                      <Chip
-                        label={session.status}
-                        color={getStatusColor(session.status)}
-                        size="small"
-                      />
-                    </TableCell>
-                    <TableCell>
-                      {new Date(session.created_at).toLocaleString()}
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        variant="outlined"
-                        size="small"
-                        onClick={() => handleViewSession(session)}
-                        sx={{ mr: 1 }}
-                      >
-                        View
-                      </Button>
-                      {session.recording_count > 0 ? (
-                        <IconButton
-                          color="primary"
-                          onClick={() => handleExportPDF(session.session_id)}
-                          title="Export PDF"
-                        >
-                          <PictureAsPdf />
-                        </IconButton>
-                      ) : (
-                        <IconButton
-                          disabled
-                          title="PDF available after video recording upload"
-                        >
-                          <PictureAsPdf style={{ opacity: 0.3 }} />
-                        </IconButton>
-                      )}
+              </TableHead>
+              <TableBody>
+                {agentsLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={6} align="center">
+                      Loading agents...
                     </TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
+                ) : agents.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} align="center">
+                      No agents found. Click "Add Agent" to create one.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  agents.map((agent) => (
+                    <TableRow key={agent.id}>
+                      <TableCell>{agent.id}</TableCell>
+                      <TableCell>{agent.username}</TableCell>
+                      <TableCell>{agent.email}</TableCell>
+                      <TableCell>{agent.fullName || 'N/A'}</TableCell>
+                      <TableCell>
+                        <Chip
+                          label={agent.isActive ? 'Active' : 'Inactive'}
+                          color={agent.isActive ? 'success' : 'default'}
+                          size="small"
+                        />
+                      </TableCell>
+                      <TableCell>
+                        {new Date(agent.createdAt).toLocaleString()}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
 
         {/* Create Session Dialog */}
         <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
@@ -734,6 +928,84 @@ const AdminPanel = () => {
               disabled={!rejectReason.trim()}
             >
               Confirm Reject
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Add Agent Dialog */}
+        <Dialog open={openAgentDialog} onClose={() => {
+          setOpenAgentDialog(false);
+          setNewAgent({ username: '', password: '', fullName: '' });
+          setAgentErrors({ username: '', password: '' });
+        }} maxWidth="sm" fullWidth>
+          <DialogTitle>Add New Agent</DialogTitle>
+          <DialogContent>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+              <TextField
+                label="Username *"
+                value={newAgent.username}
+                onChange={(e) => {
+                  const usernameValue = e.target.value;
+                  setNewAgent({ ...newAgent, username: usernameValue });
+                  const error = validateAgentUsername(usernameValue);
+                  setAgentErrors({ ...agentErrors, username: error });
+                }}
+                onBlur={(e) => {
+                  const error = validateAgentUsername(e.target.value);
+                  setAgentErrors({ ...agentErrors, username: error });
+                }}
+                fullWidth
+                required
+                error={!!agentErrors.username}
+                helperText={agentErrors.username || 'Username 3-30 characters, letters, numbers aur underscore only'}
+              />
+              <TextField
+                label="Password *"
+                type="password"
+                value={newAgent.password}
+                onChange={(e) => {
+                  const passwordValue = e.target.value;
+                  setNewAgent({ ...newAgent, password: passwordValue });
+                  const error = validateAgentPassword(passwordValue);
+                  setAgentErrors({ ...agentErrors, password: error });
+                }}
+                onBlur={(e) => {
+                  const error = validateAgentPassword(e.target.value);
+                  setAgentErrors({ ...agentErrors, password: error });
+                }}
+                fullWidth
+                required
+                error={!!agentErrors.password}
+                helperText={agentErrors.password || 'Password at least 6 characters hona chahiye'}
+              />
+              <TextField
+                label="Full Name (Optional)"
+                value={newAgent.fullName}
+                onChange={(e) => setNewAgent({ ...newAgent, fullName: e.target.value })}
+                fullWidth
+                helperText="Agent ka full name (optional)"
+              />
+            </Box>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => {
+              setOpenAgentDialog(false);
+              setNewAgent({ username: '', password: '', fullName: '' });
+              setAgentErrors({ username: '', password: '' });
+            }}>
+              Cancel
+            </Button>
+            <Button 
+              variant="contained" 
+              onClick={handleCreateAgent}
+              disabled={
+                !newAgent.username || 
+                !newAgent.password || 
+                !!agentErrors.username || 
+                !!agentErrors.password
+              }
+            >
+              Create Agent
             </Button>
           </DialogActions>
         </Dialog>

@@ -68,12 +68,13 @@ const AgentLogin = () => {
           <form onSubmit={handleSubmit}>
             <TextField
               fullWidth
-              label="Username"
+              label="Username or Email"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               margin="normal"
               required
               autoFocus
+              helperText="Enter your username or email address"
             />
 
             <TextField
