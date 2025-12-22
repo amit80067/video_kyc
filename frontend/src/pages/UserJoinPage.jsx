@@ -216,9 +216,26 @@ const UserJoinPage = () => {
       const stream = await webrtcService.getUserMedia();
       setLocalStream(stream);
 
-      // Setup WebRTC callbacks
-      webrtcService.onLocalStream = setLocalStream;
-      webrtcService.onRemoteStream = setRemoteStream;
+      // Setup WebRTC callbacks FIRST
+      webrtcService.onLocalStream = (stream) => {
+        console.log('📹 UserJoinPage: Local stream callback called');
+        setLocalStream(stream);
+      };
+      webrtcService.onRemoteStream = (stream) => {
+        console.log('🔄 UserJoinPage: Remote stream callback called!', {
+          stream: stream,
+          streamId: stream?.id,
+          tracks: stream?.getTracks()?.length,
+          videoTracks: stream?.getVideoTracks()?.length,
+          audioTracks: stream?.getAudioTracks()?.length
+        });
+        if (stream && stream.getTracks().length > 0) {
+          console.log('✅ Remote stream has tracks, setting state');
+          setRemoteStream(stream);
+        } else {
+          console.warn('⚠️ Remote stream has no tracks!');
+        }
+      };
       webrtcService.onConnectionStateChange = (state) => {
         console.log('Connection state:', state);
         // Agar connection disconnect ho gaya to status update
@@ -229,6 +246,12 @@ const UserJoinPage = () => {
       
       // User disconnect event handle
       if (webrtcService.socket) {
+        // Remove old listeners
+        webrtcService.socket.off('user-left');
+        webrtcService.socket.off('session-expired');
+        webrtcService.socket.off('existing-users');
+        webrtcService.socket.off('user-joined');
+        
         webrtcService.socket.on('user-left', (data) => {
           console.log('User left:', data);
           // Agent disconnect ho gaya
@@ -245,15 +268,52 @@ const UserJoinPage = () => {
           setRemoteStream(null);
           webrtcService.endCall();
         });
+        
+        // Handle existing users - if agent already joined, wait for offer or create one
+        webrtcService.socket.on('existing-users', (users) => {
+          console.log('👥 UserJoinPage: Existing users in room:', users);
+          if (users.length > 0) {
+            // Agent already in room, setup connection and create offer
+            if (!webrtcService.peerConnection && stream) {
+              console.log('🔧 UserJoinPage: Setting up peer connection for existing agent...');
+              webrtcService.setupPeerConnection().then(() => {
+                setTimeout(() => {
+                  if (webrtcService.peerConnection && stream) {
+                    console.log('📤 UserJoinPage: Creating offer for existing agent...');
+                    webrtcService.createOffer();
+                  }
+                }, 1500);
+              });
+            }
+          }
+        });
+        
+        // Handle agent joined - if agent joins after user, create offer
+        webrtcService.socket.on('user-joined', (data) => {
+          console.log('👤 UserJoinPage: Someone joined room:', data);
+          if (data.userType === 'agent') {
+            // Agent joined after user, setup connection and create offer
+            if (!webrtcService.peerConnection && stream) {
+              console.log('🔧 UserJoinPage: Setting up peer connection for new agent...');
+              webrtcService.setupPeerConnection().then(() => {
+                setTimeout(() => {
+                  if (webrtcService.peerConnection && stream) {
+                    console.log('📤 UserJoinPage: Creating offer for new agent...');
+                    webrtcService.createOffer();
+                  }
+                }, 1500);
+              });
+            }
+          }
+        });
       }
 
       // Join room
+      console.log('🚪 UserJoinPage: Joining room:', sessionId);
       webrtcService.joinRoom(sessionId, 'user');
-
-      // Create offer if needed
-      setTimeout(() => {
-        webrtcService.createOffer();
-      }, 1000);
+      
+      // Don't create offer immediately - wait for existing-users or user-joined event
+      // This prevents race conditions
 
       // Start recording
       webrtcService.startRecording();

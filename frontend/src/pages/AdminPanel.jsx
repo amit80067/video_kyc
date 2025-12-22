@@ -652,7 +652,6 @@ const AdminPanel = () => {
                 <TableRow>
                   <TableCell>ID</TableCell>
                   <TableCell>Username</TableCell>
-                  <TableCell>Email</TableCell>
                   <TableCell>Full Name</TableCell>
                   <TableCell>Status</TableCell>
                   <TableCell>Created At</TableCell>
@@ -661,13 +660,13 @@ const AdminPanel = () => {
               <TableBody>
                 {agentsLoading ? (
                   <TableRow>
-                    <TableCell colSpan={6} align="center">
+                    <TableCell colSpan={5} align="center">
                       Loading agents...
                     </TableCell>
                   </TableRow>
                 ) : agents.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} align="center">
+                    <TableCell colSpan={5} align="center">
                       No agents found. Click "Add Agent" to create one.
                     </TableCell>
                   </TableRow>
@@ -676,7 +675,6 @@ const AdminPanel = () => {
                     <TableRow key={agent.id}>
                       <TableCell>{agent.id}</TableCell>
                       <TableCell>{agent.username}</TableCell>
-                      <TableCell>{agent.email}</TableCell>
                       <TableCell>{agent.fullName || 'N/A'}</TableCell>
                       <TableCell>
                         <Chip

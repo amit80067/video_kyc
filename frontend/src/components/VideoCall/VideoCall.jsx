@@ -65,8 +65,22 @@ const VideoCall = ({
   }, [localStream]);
 
   useEffect(() => {
+    console.log('🎥 VideoCall: remoteStream changed', {
+      hasRemoteStream: !!remoteStream,
+      streamId: remoteStream?.id,
+      tracks: remoteStream?.getTracks()?.length,
+      videoRef: !!remoteVideoRef.current
+    });
     if (remoteVideoRef.current && remoteStream) {
+      console.log('✅ Setting remote video srcObject');
       remoteVideoRef.current.srcObject = remoteStream;
+      // Force play
+      remoteVideoRef.current.play().catch(err => {
+        console.error('Error playing remote video:', err);
+      });
+    } else if (remoteVideoRef.current && !remoteStream) {
+      console.log('⚠️ Clearing remote video srcObject');
+      remoteVideoRef.current.srcObject = null;
     }
   }, [remoteStream]);
 

@@ -48,7 +48,15 @@ class KYCController {
                 if (fs.existsSync(file.path)) {
                     fs.unlinkSync(file.path);
                 }
-                throw new Error(`S3 upload failed: ${s3Error.message}`);
+                
+                // Provide more helpful error message
+                let errorMessage = 'Failed to upload document to storage';
+                if (s3Error.message && s3Error.message.includes('signature')) {
+                    errorMessage = 'AWS credentials configuration error. Please contact administrator.';
+                } else if (s3Error.message) {
+                    errorMessage = `Storage upload failed: ${s3Error.message}`;
+                }
+                throw new Error(errorMessage);
             }
 
             // Save to database
@@ -142,8 +150,15 @@ class KYCController {
             
             // Return detailed error for debugging
             const errorMessage = error.message || 'Failed to upload document';
+            
+            // Check if it's an AWS/S3 error
+            let userFriendlyError = 'Failed to upload document. Please try again.';
+            if (errorMessage.includes('AWS') || errorMessage.includes('S3') || errorMessage.includes('signature') || errorMessage.includes('credentials')) {
+                userFriendlyError = 'Storage service configuration error. Please contact administrator.';
+            }
+            
             res.status(500).json({ 
-                error: 'Failed to upload document',
+                error: userFriendlyError,
                 details: process.env.NODE_ENV === 'development' ? errorMessage : undefined,
                 stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
             });
@@ -412,6 +427,7 @@ class KYCController {
     }
 
     async uploadRecording(req, res) {
+        let tempFilePath = null;
         try {
             const { sessionId } = req.body;
             const file = req.file;
@@ -424,6 +440,8 @@ class KYCController {
                 return res.status(400).json({ error: 'Session ID is required' });
             }
 
+            tempFilePath = file.path;
+
             // Verify session exists
             const sessionResult = await pool.query(
                 'SELECT id FROM kyc_sessions WHERE session_id = $1',
@@ -431,13 +449,46 @@ class KYCController {
             );
 
             if (sessionResult.rows.length === 0) {
+                // Clean up file
+                if (fs.existsSync(tempFilePath)) {
+                    fs.unlinkSync(tempFilePath);
+                }
                 return res.status(404).json({ error: 'Session not found' });
             }
 
             const kycSessionId = sessionResult.rows[0].id;
 
             // Save recording to S3
-            const recordingResult = await videoRecordingService.saveRecording(file.path, sessionId);
+            let recordingResult;
+            try {
+                recordingResult = await videoRecordingService.saveRecording(file.path, sessionId);
+            } catch (s3Error) {
+                console.error('S3 upload failed for recording:', s3Error);
+                console.error('S3 error details:', {
+                    message: s3Error.message,
+                    code: s3Error.code,
+                    statusCode: s3Error.statusCode
+                });
+                
+                // Clean up local file
+                if (fs.existsSync(tempFilePath)) {
+                    fs.unlinkSync(tempFilePath);
+                }
+                
+                // Provide more helpful error message
+                let errorMessage = 'Failed to upload recording to storage';
+                if (s3Error.message && s3Error.message.includes('signature')) {
+                    errorMessage = 'AWS credentials configuration error. Please contact administrator.';
+                } else if (s3Error.message) {
+                    errorMessage = `Storage upload failed: ${s3Error.message}`;
+                }
+                
+                return res.status(500).json({ 
+                    error: 'Failed to upload recording',
+                    details: errorMessage,
+                    s3Error: process.env.NODE_ENV === 'development' ? s3Error.message : undefined
+                });
+            }
 
             // Save to database
             const result = await pool.query(
@@ -454,8 +505,8 @@ class KYCController {
             );
 
             // Clean up local file
-            if (fs.existsSync(file.path)) {
-                fs.unlinkSync(file.path);
+            if (fs.existsSync(tempFilePath)) {
+                fs.unlinkSync(tempFilePath);
             }
 
             res.status(201).json({
@@ -464,7 +515,24 @@ class KYCController {
             });
         } catch (error) {
             console.error('Upload recording error:', error);
-            res.status(500).json({ error: 'Failed to upload recording' });
+            console.error('Error stack:', error.stack);
+            
+            // Clean up file if it exists
+            if (tempFilePath && fs.existsSync(tempFilePath)) {
+                try {
+                    fs.unlinkSync(tempFilePath);
+                } catch (cleanupError) {
+                    console.error('Failed to cleanup file:', cleanupError);
+                }
+            }
+            
+            // Return detailed error for debugging
+            const errorMessage = error.message || 'Failed to upload recording';
+            res.status(500).json({ 
+                error: 'Failed to upload recording',
+                details: process.env.NODE_ENV === 'development' ? errorMessage : undefined,
+                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            });
         }
     }
 

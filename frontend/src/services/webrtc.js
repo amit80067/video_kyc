@@ -62,6 +62,7 @@ class WebRTCService {
    * Setup WebRTC peer connection
    */
   async setupPeerConnection() {
+    console.log('🔧 Setting up peer connection...');
     const configuration = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -69,20 +70,91 @@ class WebRTCService {
       ],
     };
 
-    this.peerConnection = new RTCPeerConnection(configuration);
-
-    // Add local stream tracks
-    if (this.localStream) {
-      this.localStream.getTracks().forEach((track) => {
-        this.peerConnection.addTrack(track, this.localStream);
-      });
+    // Close existing connection if any
+    if (this.peerConnection) {
+      console.log('🔄 Closing existing peer connection');
+      this.peerConnection.close();
+      this.peerConnection = null;
     }
 
-    // Handle remote stream
+    this.peerConnection = new RTCPeerConnection(configuration);
+    console.log('✅ Peer connection created, state:', this.peerConnection.signalingState);
+
+    // Add local stream tracks BEFORE setting up handlers
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((track) => {
+        console.log('➕ Adding local track:', track.kind, track.id);
+        this.peerConnection.addTrack(track, this.localStream);
+      });
+    } else {
+      console.warn('⚠️ No local stream available when setting up peer connection');
+    }
+
+    // Handle remote stream - must be set before any offer/answer exchange
     this.peerConnection.ontrack = (event) => {
-      this.remoteStream = event.streams[0];
-      if (this.onRemoteStream) {
-        this.onRemoteStream(this.remoteStream);
+      console.log('🎥 Received remote track:', event.track.kind, 'Streams:', event.streams?.length, 'Track ID:', event.track.id);
+      console.log('ontrack event details:', {
+        streams: event.streams?.length || 0,
+        trackKind: event.track.kind,
+        trackId: event.track.id,
+        trackEnabled: event.track.enabled,
+        trackReadyState: event.track.readyState
+      });
+      
+      if (event.streams && event.streams.length > 0) {
+        this.remoteStream = event.streams[0];
+        console.log('✅ Remote stream set from event.streams:', {
+          streamId: this.remoteStream.id,
+          tracks: this.remoteStream.getTracks().length,
+          videoTracks: this.remoteStream.getVideoTracks().length,
+          audioTracks: this.remoteStream.getAudioTracks().length
+        });
+        if (this.onRemoteStream) {
+          console.log('📞 Calling onRemoteStream callback with stream');
+          // Force callback with setTimeout to ensure state update
+          setTimeout(() => {
+            if (this.onRemoteStream && this.remoteStream) {
+              this.onRemoteStream(this.remoteStream);
+            }
+          }, 100);
+        } else {
+          console.warn('⚠️ onRemoteStream callback not set!');
+        }
+      } else if (event.track) {
+        // If no stream, create one from track
+        if (!this.remoteStream) {
+          this.remoteStream = new MediaStream();
+          console.log('📹 Created new remote stream for track');
+        }
+        this.remoteStream.addTrack(event.track);
+        console.log('✅ Added track to remote stream:', {
+          trackKind: event.track.kind,
+          trackId: event.track.id,
+          totalTracks: this.remoteStream.getTracks().length,
+          videoTracks: this.remoteStream.getVideoTracks().length,
+          audioTracks: this.remoteStream.getAudioTracks().length
+        });
+        if (this.onRemoteStream) {
+          console.log('📞 Calling onRemoteStream callback with stream (from track)');
+          // Force callback with setTimeout to ensure state update
+          setTimeout(() => {
+            if (this.onRemoteStream && this.remoteStream) {
+              this.onRemoteStream(this.remoteStream);
+            }
+          }, 100);
+        } else {
+          console.warn('⚠️ onRemoteStream callback not set!');
+        }
+      }
+      
+      // Also check if we need to update the callback after tracks are added
+      if (this.remoteStream && this.remoteStream.getTracks().length > 0 && this.onRemoteStream) {
+        console.log('🔄 Ensuring remote stream callback is called with latest stream');
+        setTimeout(() => {
+          if (this.onRemoteStream && this.remoteStream) {
+            this.onRemoteStream(this.remoteStream);
+          }
+        }, 200);
       }
     };
 
@@ -363,43 +435,57 @@ class WebRTCService {
     // Handle offer
     this.socket.on('offer', async (data) => {
       try {
+        console.log('Received offer from:', data.socketId);
+        
         if (!this.peerConnection) {
           await this.setupPeerConnection();
         }
 
-        // Check connection state before setting remote description
-        if (this.peerConnection.signalingState === 'stable' || 
-            this.peerConnection.signalingState === 'have-local-offer') {
-          // Only set remote description if in correct state
-          if (this.peerConnection.signalingState === 'stable') {
-            await this.peerConnection.setRemoteDescription(
-              new RTCSessionDescription(data.offer)
-            );
-          } else {
-            console.warn('Cannot set remote description, current state:', this.peerConnection.signalingState);
-            return;
-          }
-        } else {
+        // Only process offer if we're in stable state (not already processing)
+        if (this.peerConnection.signalingState === 'stable') {
           await this.peerConnection.setRemoteDescription(
             new RTCSessionDescription(data.offer)
           );
-        }
+          console.log('Remote description set, creating answer...');
 
-        // Create and set answer only if in correct state
-        if (this.peerConnection.signalingState === 'have-remote-offer') {
+          // Create and set answer
           const answer = await this.peerConnection.createAnswer();
           await this.peerConnection.setLocalDescription(answer);
+          console.log('✅ Answer created and set, sending to:', data.socketId);
+          
+          // Check if we already have remote tracks (sometimes tracks arrive before answer)
+          if (this.peerConnection.getReceivers().length > 0) {
+            console.log('📡 Found existing receivers:', this.peerConnection.getReceivers().length);
+            this.peerConnection.getReceivers().forEach((receiver, index) => {
+              if (receiver.track) {
+                console.log(`Receiver ${index}:`, receiver.track.kind, receiver.track.id);
+                if (!this.remoteStream) {
+                  this.remoteStream = new MediaStream();
+                }
+                if (!this.remoteStream.getTracks().some(t => t.id === receiver.track.id)) {
+                  this.remoteStream.addTrack(receiver.track);
+                  console.log('✅ Added existing receiver track to remote stream');
+                }
+              }
+            });
+            if (this.remoteStream && this.remoteStream.getTracks().length > 0 && this.onRemoteStream) {
+              console.log('📞 Calling onRemoteStream with existing tracks');
+              this.onRemoteStream(this.remoteStream);
+            }
+          }
 
           this.socket.emit('answer', {
             answer: answer,
             roomId: this.roomId,
             targetSocketId: data.socketId,
           });
+        } else {
+          console.warn('Cannot handle offer, current state:', this.peerConnection.signalingState);
         }
       } catch (error) {
         console.error('Error handling offer:', error);
         // If error, try to reset connection
-        if (error.name === 'InvalidStateError') {
+        if (error.name === 'InvalidStateError' || error.name === 'OperationError') {
           console.log('Invalid state error, resetting peer connection');
           if (this.peerConnection) {
             this.peerConnection.close();
@@ -407,8 +493,23 @@ class WebRTCService {
           }
           // Retry after a short delay
           setTimeout(async () => {
-            if (!this.peerConnection) {
+            if (!this.peerConnection && this.localStream) {
               await this.setupPeerConnection();
+              // Retry handling the offer
+              if (data && data.offer) {
+                try {
+                  await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+                  const answer = await this.peerConnection.createAnswer();
+                  await this.peerConnection.setLocalDescription(answer);
+                  this.socket.emit('answer', {
+                    answer: answer,
+                    roomId: this.roomId,
+                    targetSocketId: data.socketId,
+                  });
+                } catch (retryError) {
+                  console.error('Retry failed:', retryError);
+                }
+              }
             }
           }, 1000);
         }
@@ -418,20 +519,45 @@ class WebRTCService {
     // Handle answer
     this.socket.on('answer', async (data) => {
       try {
+        console.log('Received answer from:', data.socketId);
         if (this.peerConnection) {
           // Check connection state before setting remote description
           if (this.peerConnection.signalingState === 'have-local-offer') {
             await this.peerConnection.setRemoteDescription(
               new RTCSessionDescription(data.answer)
             );
+            console.log('✅ Answer set successfully, connection should be established');
+            
+            // Check if we already have remote tracks
+            if (this.peerConnection.getReceivers().length > 0) {
+              console.log('📡 Found existing receivers after answer:', this.peerConnection.getReceivers().length);
+              this.peerConnection.getReceivers().forEach((receiver, index) => {
+                if (receiver.track) {
+                  console.log(`Receiver ${index}:`, receiver.track.kind, receiver.track.id);
+                  if (!this.remoteStream) {
+                    this.remoteStream = new MediaStream();
+                  }
+                  if (!this.remoteStream.getTracks().some(t => t.id === receiver.track.id)) {
+                    this.remoteStream.addTrack(receiver.track);
+                    console.log('✅ Added existing receiver track to remote stream after answer');
+                  }
+                }
+              });
+              if (this.remoteStream && this.remoteStream.getTracks().length > 0 && this.onRemoteStream) {
+                console.log('📞 Calling onRemoteStream with existing tracks after answer');
+                this.onRemoteStream(this.remoteStream);
+              }
+            }
           } else {
             console.warn('Cannot set remote answer, current state:', this.peerConnection.signalingState);
           }
+        } else {
+          console.warn('Received answer but no peer connection exists');
         }
       } catch (error) {
         console.error('Error handling answer:', error);
-        if (error.name === 'InvalidStateError') {
-          console.log('Invalid state error in answer handler');
+        if (error.name === 'InvalidStateError' || error.name === 'OperationError') {
+          console.log('Invalid state error in answer handler, state:', this.peerConnection?.signalingState);
         }
       }
     });
@@ -456,9 +582,14 @@ class WebRTCService {
     // Handle existing users
     this.socket.on('existing-users', (users) => {
       console.log('Existing users:', users);
-      // If there are existing users, create offer
-      if (users.length > 0 && !this.peerConnection) {
-        this.createOffer();
+      // If there are existing users and we don't have a connection, create offer
+      // But only if we have local stream ready
+      if (users.length > 0 && !this.peerConnection && this.localStream) {
+        setTimeout(() => {
+          if (!this.peerConnection && this.localStream) {
+            this.createOffer();
+          }
+        }, 500);
       }
     });
   }
@@ -531,8 +662,22 @@ class WebRTCService {
    */
   async createOffer() {
     try {
+      console.log('Creating offer, current state:', this.peerConnection?.signalingState);
+      
       if (!this.peerConnection) {
+        console.log('No peer connection, setting up...');
         await this.setupPeerConnection();
+      }
+
+      // Ensure local stream is added
+      if (this.localStream && this.peerConnection) {
+        const existingTracks = this.peerConnection.getSenders().map(s => s.track?.kind);
+        this.localStream.getTracks().forEach((track) => {
+          if (!existingTracks.includes(track.kind)) {
+            console.log('Adding local track to existing connection:', track.kind);
+            this.peerConnection.addTrack(track, this.localStream);
+          }
+        });
       }
 
       // Check if already in a state where we can create offer
@@ -541,22 +686,27 @@ class WebRTCService {
         return;
       }
 
-      const offer = await this.peerConnection.createOffer();
+      console.log('Creating offer...');
+      const offer = await this.peerConnection.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true
+      });
       
       // Set local description only if still in stable state
       if (this.peerConnection.signalingState === 'stable') {
         await this.peerConnection.setLocalDescription(offer);
+        console.log('Local description set, sending offer to room:', this.roomId);
 
         this.socket.emit('offer', {
           offer: offer,
           roomId: this.roomId,
         });
       } else {
-        console.warn('State changed before setting local description');
+        console.warn('State changed before setting local description:', this.peerConnection.signalingState);
       }
     } catch (error) {
       console.error('Error creating offer:', error);
-      if (error.name === 'InvalidStateError') {
+      if (error.name === 'InvalidStateError' || error.name === 'OperationError') {
         console.log('Invalid state error in createOffer, resetting connection');
         if (this.peerConnection) {
           this.peerConnection.close();
@@ -564,8 +714,10 @@ class WebRTCService {
         }
         // Retry after a short delay
         setTimeout(async () => {
-          if (!this.peerConnection) {
+          if (!this.peerConnection && this.localStream) {
             await this.setupPeerConnection();
+            // Retry creating offer
+            setTimeout(() => this.createOffer(), 500);
           }
         }, 1000);
       }

@@ -12,9 +12,9 @@ class AuthController {
                 return res.status(400).json({ error: 'Username/Email and password are required' });
             }
 
-            // Get user from database - support both username and email
+            // Get user from database - support both username and email (case-insensitive)
             const result = await pool.query(
-                'SELECT id, username, email, password_hash, role, full_name, is_active FROM users WHERE username = $1 OR email = $1',
+                'SELECT id, username, email, password_hash, role, full_name, is_active FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1)',
                 [username]
             );
 

@@ -126,13 +126,26 @@ const AgentDashboard = () => {
         }
       }
 
-      // Get user media
-      const stream = await webrtcService.getUserMedia();
-      setLocalStream(stream);
-
-      // Setup WebRTC callbacks
-      webrtcService.onLocalStream = setLocalStream;
-      webrtcService.onRemoteStream = setRemoteStream;
+      // Setup WebRTC callbacks FIRST (before any connection setup)
+      webrtcService.onLocalStream = (stream) => {
+        console.log('📹 AgentDashboard: Local stream callback called');
+        setLocalStream(stream);
+      };
+      webrtcService.onRemoteStream = (stream) => {
+        console.log('🔄 AgentDashboard: Remote stream callback called!', {
+          stream: stream,
+          streamId: stream?.id,
+          tracks: stream?.getTracks()?.length,
+          videoTracks: stream?.getVideoTracks()?.length,
+          audioTracks: stream?.getAudioTracks()?.length
+        });
+        if (stream && stream.getTracks().length > 0) {
+          console.log('✅ Remote stream has tracks, setting state');
+          setRemoteStream(stream);
+        } else {
+          console.warn('⚠️ Remote stream has no tracks!');
+        }
+      };
       webrtcService.onConnectionStateChange = (state) => {
         console.log('Connection state:', state);
         // Agar connection disconnect ho gaya
@@ -141,8 +154,17 @@ const AgentDashboard = () => {
         }
       };
 
+      // Get user media
+      const stream = await webrtcService.getUserMedia();
+      setLocalStream(stream);
+
       // User disconnect event handle
       if (webrtcService.socket) {
+        // Remove old listeners to prevent duplicates
+        webrtcService.socket.off('user-left');
+        webrtcService.socket.off('existing-users');
+        webrtcService.socket.off('user-joined');
+        
         webrtcService.socket.on('user-left', async (data) => {
           console.log('User left:', data);
           // User disconnect ho gaya - session expire kar do
@@ -162,36 +184,61 @@ const AgentDashboard = () => {
         
         // Handle existing users - if user already joined, create offer
         webrtcService.socket.on('existing-users', (users) => {
-          console.log('Existing users in room:', users);
-          if (users.length > 0 && !webrtcService.peerConnection) {
-            // User already in room, create offer only if no connection exists
-            setTimeout(() => {
-              webrtcService.createOffer();
-            }, 500);
+          console.log('👥 Existing users in room:', users);
+          if (users.length > 0) {
+            // Ensure we have local stream and peer connection setup
+            if (!webrtcService.peerConnection && stream) {
+              console.log('🔧 Setting up peer connection for existing users...');
+              webrtcService.setupPeerConnection().then(() => {
+                setTimeout(() => {
+                  if (webrtcService.peerConnection && stream) {
+                    console.log('📤 Creating offer for existing users...');
+                    webrtcService.createOffer();
+                  }
+                }, 1500);
+              });
+            } else if (webrtcService.peerConnection && stream) {
+              // Connection exists, just create offer
+              setTimeout(() => {
+                console.log('📤 Creating offer (connection exists)...');
+                webrtcService.createOffer();
+              }, 1000);
+            }
           }
         });
         
         // Handle user joined - if user joins after agent, create offer
         webrtcService.socket.on('user-joined', (data) => {
-          console.log('User joined room:', data);
-          // If user joins after agent, create offer only if no connection exists
-          if (data.userType === 'user' && !webrtcService.peerConnection) {
-            setTimeout(() => {
-              webrtcService.createOffer();
-            }, 500);
+          console.log('👤 User joined room:', data);
+          if (data.userType === 'user') {
+            // Ensure we have local stream and peer connection setup
+            if (!webrtcService.peerConnection && stream) {
+              console.log('🔧 Setting up peer connection for new user...');
+              webrtcService.setupPeerConnection().then(() => {
+                setTimeout(() => {
+                  if (webrtcService.peerConnection && stream) {
+                    console.log('📤 Creating offer for new user...');
+                    webrtcService.createOffer();
+                  }
+                }, 1500);
+              });
+            } else if (webrtcService.peerConnection && stream) {
+              // Connection exists, just create offer
+              setTimeout(() => {
+                console.log('📤 Creating offer for new user (connection exists)...');
+                webrtcService.createOffer();
+              }, 1000);
+            }
           }
         });
       }
 
-      // Join room
+      // Join room AFTER setting up callbacks
+      console.log('🚪 Joining room:', session.session_id);
       webrtcService.joinRoom(session.session_id, 'agent');
       
-      // Create offer after joining (in case user already joined) - only if no connection
-      setTimeout(() => {
-        if (!webrtcService.peerConnection) {
-          webrtcService.createOffer();
-        }
-      }, 1000);
+      // Don't create offer immediately - wait for existing-users or user-joined event
+      // This prevents race conditions where both user and agent create offers
 
       // Start recording automatically
       webrtcService.startRecording();
@@ -320,6 +367,7 @@ const AgentDashboard = () => {
           <Box sx={{ mt: 2 }}>
             <DocumentCapture 
               sessionId={selectedSession.session_id} 
+              remoteStream={remoteStream}
               onBack={() => setShowDocumentCapture(false)}
               onUploaded={handleDocumentUploaded}
             />

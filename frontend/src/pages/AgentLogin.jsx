@@ -56,7 +56,7 @@ const AgentLogin = () => {
       >
         <Paper elevation={3} sx={{ p: 4, width: '100%' }}>
           <Typography variant="h4" gutterBottom align="center">
-            Agent Login
+            Login
           </Typography>
 
           {error && (

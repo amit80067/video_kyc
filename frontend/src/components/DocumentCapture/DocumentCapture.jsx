@@ -12,7 +12,7 @@ import {
 import { CameraAlt, ArrowBack, Upload } from '@mui/icons-material';
 import api from '../../services/api';
 
-const DocumentCapture = ({ sessionId, onBack, onUploaded }) => {
+const DocumentCapture = ({ sessionId, remoteStream, onBack, onUploaded }) => {
   const [capturedImage, setCapturedImage] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploaded, setUploaded] = useState(false);
@@ -21,6 +21,27 @@ const DocumentCapture = ({ sessionId, onBack, onUploaded }) => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
+
+  // Use remoteStream (user's video) if available, otherwise fallback to agent's camera
+  React.useEffect(() => {
+    if (remoteStream && videoRef.current) {
+      // Use user's remote stream (preferred) - this shows USER's video to agent
+      videoRef.current.srcObject = remoteStream;
+      streamRef.current = remoteStream;
+      console.log('Using remote stream (user video) for document capture');
+    } else if (!remoteStream) {
+      // Fallback: Use agent's camera if remote stream not available
+      startCamera();
+    }
+
+    return () => {
+      // Only stop tracks if we started our own camera (not remote stream)
+      if (streamRef.current && streamRef.current !== remoteStream) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+    };
+  }, [remoteStream]);
 
   const startCamera = async () => {
     try {
@@ -86,8 +107,8 @@ const DocumentCapture = ({ sessionId, onBack, onUploaded }) => {
       const imageData = canvas.toDataURL('image/jpeg');
       setCapturedImage(imageData);
 
-      // Stop camera
-      if (streamRef.current) {
+      // Don't stop remote stream tracks (user's video), only stop if it's our own camera
+      if (streamRef.current && streamRef.current !== remoteStream) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       }
@@ -97,7 +118,13 @@ const DocumentCapture = ({ sessionId, onBack, onUploaded }) => {
   const retakePhoto = () => {
     setCapturedImage(null);
     setUploaded(false);
-    startCamera();
+    // Restore video stream (remoteStream if available, otherwise agent's camera)
+    if (remoteStream && videoRef.current) {
+      videoRef.current.srcObject = remoteStream;
+      streamRef.current = remoteStream;
+    } else if (videoRef.current) {
+      startCamera();
+    }
   };
 
   const uploadDocument = async () => {
@@ -136,14 +163,6 @@ const DocumentCapture = ({ sessionId, onBack, onUploaded }) => {
     }
   };
 
-  React.useEffect(() => {
-    startCamera();
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-      }
-    };
-  }, []);
 
   return (
     <Box>

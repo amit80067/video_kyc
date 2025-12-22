@@ -80,14 +80,24 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// 404 handler for undefined routes
-app.use((req, res) => {
+// 404 handler for undefined API routes (must be before static files)
+app.use('/api/*', (req, res) => {
     res.status(404).json({ 
         error: 'Route not found',
         path: req.path,
         method: req.method,
         message: `The endpoint ${req.method} ${req.path} does not exist`
     });
+});
+
+// Serve static files from React app (only for non-API routes)
+const path = require('path');
+const frontendBuildPath = path.join(__dirname, '../../frontend/build');
+app.use(express.static(frontendBuildPath));
+
+// Serve React app for all non-API routes (catch-all must be last)
+app.get('*', (req, res) => {
+    res.sendFile(path.join(frontendBuildPath, 'index.html'));
 });
 
 // WebRTC Signaling - Socket.io handlers
