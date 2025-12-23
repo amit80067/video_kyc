@@ -7,6 +7,9 @@ const { authenticate, requireRole } = require('../middleware/auth');
 // Upload document
 router.post('/documents/upload', authenticate, upload.single('document'), kycController.uploadDocument);
 
+// Upload user photo
+router.post('/sessions/upload-user-photo', authenticate, upload.single('userPhoto'), kycController.uploadUserPhoto);
+
 // Process OCR on document
 router.post('/documents/:documentId/ocr', authenticate, requireRole('agent', 'admin'), kycController.processOCR);
 

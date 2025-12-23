@@ -26,9 +26,13 @@ const s3 = new AWS.S3();
 // Rekognition instance
 const rekognition = new AWS.Rekognition();
 
+// Textract instance (for document text extraction)
+const textract = new AWS.Textract();
+
 module.exports = {
     s3,
     rekognition,
-    S3_BUCKET: process.env.S3_BUCKET_NAME || 'videokyc1'
+    textract,
+    S3_BUCKET: process.env.S3_BUCKET_NAME || 'video-kyc1'
 };
 

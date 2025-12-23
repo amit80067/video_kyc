@@ -185,6 +185,7 @@ class WebRTCService {
   
   /**
    * Get video constraints based on current quality setting
+   * Enhanced with auto-focus and better quality settings
    */
   getVideoConstraints() {
     const constraints = {
@@ -193,25 +194,32 @@ class WebRTCService {
     
     switch (this.currentVideoQuality) {
       case 'high':
-        constraints.width = { ideal: 1280, max: 1920 };
-        constraints.height = { ideal: 720, max: 1080 };
+        constraints.width = { ideal: 1920, min: 1280 };
+        constraints.height = { ideal: 1080, min: 720 };
         constraints.frameRate = { ideal: 30, max: 30 };
         break;
       case 'medium':
-        constraints.width = { ideal: 640, max: 1280 };
-        constraints.height = { ideal: 480, max: 720 };
+        constraints.width = { ideal: 1280, min: 640 };
+        constraints.height = { ideal: 720, min: 480 };
         constraints.frameRate = { ideal: 24, max: 24 };
         break;
       case 'low':
-        constraints.width = { ideal: 320, max: 640 };
-        constraints.height = { ideal: 240, max: 480 };
+        constraints.width = { ideal: 640, min: 320 };
+        constraints.height = { ideal: 480, min: 240 };
         constraints.frameRate = { ideal: 15, max: 15 };
         break;
       default:
-        constraints.width = { ideal: 640 };
-        constraints.height = { ideal: 480 };
+        constraints.width = { ideal: 1280, min: 640 };
+        constraints.height = { ideal: 720, min: 480 };
         constraints.frameRate = { ideal: 24 };
     }
+    
+    // Add advanced camera features for better quality
+    constraints.advanced = [
+      { focusMode: 'continuous' }, // Continuous auto-focus
+      { exposureMode: 'continuous' }, // Auto exposure
+      { whiteBalanceMode: 'continuous' }, // Auto white balance
+    ];
     
     return constraints;
   }
@@ -625,6 +633,25 @@ class WebRTCService {
           autoGainControl: true
         },
       });
+
+      // Apply additional camera settings for better focus and quality
+      const videoTrack = this.localStream.getVideoTracks()[0];
+      if (videoTrack && videoTrack.getCapabilities) {
+        const capabilities = videoTrack.getCapabilities();
+        console.log('Camera capabilities:', capabilities);
+        
+        // Try to enable continuous auto-focus if supported
+        if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
+          try {
+            await videoTrack.applyConstraints({
+              advanced: [{ focusMode: 'continuous' }]
+            });
+            console.log('✅ Auto-focus enabled for video call');
+          } catch (focusErr) {
+            console.warn('Could not set focus mode:', focusErr);
+          }
+        }
+      }
 
       if (this.onLocalStream) {
         this.onLocalStream(this.localStream);

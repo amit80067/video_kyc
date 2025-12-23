@@ -1,0 +1,25 @@
+[
+    {
+        "AllowedHeaders": [
+            "*"
+        ],
+        "AllowedMethods": [
+            "GET",
+            "PUT",
+            "POST",
+            "DELETE",
+            "HEAD"
+        ],
+        "AllowedOrigins": [
+            "https://kyc.virtualinvestigation.xyz",
+            "https://backend.virtualinvestigation.xyz",
+            "http://localhost:3000",
+            "http://localhost:8005"
+        ],
+        "ExposeHeaders": [
+            "ETag"
+        ],
+        "MaxAgeSeconds": 3000
+    }
+]
+

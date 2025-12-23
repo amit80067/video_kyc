@@ -1,5 +1,6 @@
 const pool = require('../config/database');
 const ocrService = require('../services/ocrService');
+const textractService = require('../services/textractService');
 const faceVerificationService = require('../services/faceVerificationService');
 const s3Service = require('../services/s3Service');
 const videoRecordingService = require('../services/videoRecordingService');
@@ -74,24 +75,81 @@ class KYCController {
             setImmediate(async () => {
                 let tempFilePath = null;
                 try {
-                    // Download file from S3 to temp location for OCR
-                    const tempPath = path.join(__dirname, '../../temp', `doc-${document.id}-${Date.now()}.jpg`);
-                    const tempDir = path.dirname(tempPath);
-                    if (!fs.existsSync(tempDir)) {
-                        fs.mkdirSync(tempDir, { recursive: true });
-                    }
-                    
-                    tempFilePath = await s3Service.downloadFile(s3Key, tempPath);
-                    
                     let ocrResult;
-                    // If document type is Aadhaar, use specialized extraction
-                    if (documentType === 'aadhaar') {
-                        ocrResult = await ocrService.extractAadhaarData(tempFilePath);
+                    
+                    // Try Textract first if AWS credentials available
+                    if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+                        try {
+                            console.log(`Using Textract for document ${document.id} with S3 key: ${s3Key}`);
+                            if (documentType === 'aadhaar') {
+                                ocrResult = await textractService.extractAadhaarData(s3Key);
+                            } else if (documentType === 'pan') {
+                                ocrResult = await textractService.extractPANData(s3Key);
+                            } else {
+                                ocrResult = await textractService.extractTextFromS3(s3Key);
+                            }
+                            console.log(`✅ Textract extraction successful for document ${document.id}`);
+                        } catch (textractError) {
+                            console.warn(`⚠️ Textract failed for document ${document.id}, falling back to Tesseract:`, textractError.message);
+                            // Fallback to Tesseract - download file first
+                            const tempPath = path.join(__dirname, '../../temp', `doc-${document.id}-${Date.now()}.jpg`);
+                            const tempDir = path.dirname(tempPath);
+                            if (!fs.existsSync(tempDir)) {
+                                fs.mkdirSync(tempDir, { recursive: true });
+                            }
+                            
+                            tempFilePath = await s3Service.downloadFile(s3Key, tempPath);
+                            
+                            // Use specialized extraction based on document type
+                            if (documentType === 'aadhaar') {
+                                ocrResult = await ocrService.extractAadhaarData(tempFilePath);
+                            } else if (documentType === 'pan') {
+                                ocrResult = await ocrService.extractPANData(tempFilePath);
+                            } else {
+                                ocrResult = await ocrService.extractText(tempFilePath);
+                            }
+                        }
                     } else {
-                        ocrResult = await ocrService.extractText(tempFilePath);
+                        // Use Tesseract (download file first)
+                        console.log(`Using Tesseract for document ${document.id} (AWS credentials not available)`);
+                        const tempPath = path.join(__dirname, '../../temp', `doc-${document.id}-${Date.now()}.jpg`);
+                        const tempDir = path.dirname(tempPath);
+                        if (!fs.existsSync(tempDir)) {
+                            fs.mkdirSync(tempDir, { recursive: true });
+                        }
+                        
+                        tempFilePath = await s3Service.downloadFile(s3Key, tempPath);
+                        
+                        // Use specialized extraction based on document type
+                        if (documentType === 'aadhaar') {
+                            ocrResult = await ocrService.extractAadhaarData(tempFilePath);
+                        } else if (documentType === 'pan') {
+                            ocrResult = await ocrService.extractPANData(tempFilePath);
+                        } else {
+                            ocrResult = await ocrService.extractText(tempFilePath);
+                        }
                     }
 
                     // Update document with OCR results
+                    // For PAN: save panNumber, fatherName
+                    // For Aadhaar: save aadhaarNumber, gender
+                    const updateData = [
+                        JSON.stringify(ocrResult),
+                        ocrResult.aadhaarNumber || ocrResult.panNumber || null, // Store PAN or Aadhaar number in aadhaar_number field
+                        ocrResult.name || null,
+                        ocrResult.dateOfBirth || null,
+                        ocrResult.confidence || null,
+                        document.id
+                    ];
+                    
+                    // Store additional fields in ocr_extracted_data JSON
+                    const ocrDataToStore = {
+                        ...ocrResult,
+                        panNumber: ocrResult.panNumber || null,
+                        fatherName: ocrResult.fatherName || null,
+                        gender: ocrResult.gender || null
+                    };
+                    
                     await pool.query(
                         `UPDATE documents 
                         SET ocr_extracted_data = $1,
@@ -102,8 +160,8 @@ class KYCController {
                             updated_at = NOW()
                         WHERE id = $6`,
                         [
-                            JSON.stringify(ocrResult),
-                            ocrResult.aadhaarNumber || null,
+                            JSON.stringify(ocrDataToStore),
+                            ocrResult.aadhaarNumber || ocrResult.panNumber || null,
                             ocrResult.name || null,
                             ocrResult.dateOfBirth || null,
                             ocrResult.confidence || null,
@@ -192,15 +250,42 @@ class KYCController {
             // In production, you might want to download the file first
             const imageUrl = document.image_url;
 
-            // Process OCR (assuming we have local file path)
-            // In production, download from S3 first
+            // Process OCR - Try Textract first (if S3 key available), fallback to Tesseract
             let ocrResult;
             try {
-                // If document type is Aadhaar, use specialized extraction
-                if (document.document_type === 'aadhaar') {
-                    ocrResult = await ocrService.extractAadhaarData(imageUrl);
+                // If document has S3 key and AWS credentials available, use Textract
+                if (document.s3_key && process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+                    try {
+                        console.log(`Using Textract for document ${documentId} with S3 key: ${document.s3_key}`);
+                        if (document.document_type === 'aadhaar') {
+                            ocrResult = await textractService.extractAadhaarData(document.s3_key);
+                        } else if (document.document_type === 'pan') {
+                            ocrResult = await textractService.extractPANData(document.s3_key);
+                        } else {
+                            ocrResult = await textractService.extractTextFromS3(document.s3_key);
+                        }
+                        console.log('✅ Textract extraction successful');
+                    } catch (textractError) {
+                        console.warn('⚠️ Textract failed, falling back to Tesseract:', textractError.message);
+                        // Fallback to Tesseract
+                        if (document.document_type === 'aadhaar') {
+                            ocrResult = await ocrService.extractAadhaarData(imageUrl);
+                        } else if (document.document_type === 'pan') {
+                            ocrResult = await ocrService.extractPANData(imageUrl);
+                        } else {
+                            ocrResult = await ocrService.extractText(imageUrl);
+                        }
+                    }
                 } else {
-                    ocrResult = await ocrService.extractText(imageUrl);
+                    // Use Tesseract (local OCR)
+                    console.log(`Using Tesseract for document ${documentId}`);
+                    if (document.document_type === 'aadhaar') {
+                        ocrResult = await ocrService.extractAadhaarData(imageUrl);
+                    } else if (document.document_type === 'pan') {
+                        ocrResult = await ocrService.extractPANData(imageUrl);
+                    } else {
+                        ocrResult = await ocrService.extractText(imageUrl);
+                    }
                 }
             } catch (ocrError) {
                 console.error('OCR processing error:', ocrError);
@@ -208,6 +293,14 @@ class KYCController {
             }
 
             // Update document with OCR results
+            // Store additional fields in ocr_extracted_data JSON
+            const ocrDataToStore = {
+                ...ocrResult,
+                panNumber: ocrResult.panNumber || null,
+                fatherName: ocrResult.fatherName || null,
+                gender: ocrResult.gender || null
+            };
+            
             const updateResult = await pool.query(
                 `UPDATE documents 
                 SET ocr_extracted_data = $1,
@@ -219,8 +312,8 @@ class KYCController {
                 WHERE id = $6
                 RETURNING *`,
                 [
-                    JSON.stringify(ocrResult),
-                    ocrResult.aadhaarNumber || null,
+                    JSON.stringify(ocrDataToStore),
+                    ocrResult.aadhaarNumber || ocrResult.panNumber || null,
                     ocrResult.name || null,
                     ocrResult.dateOfBirth || null,
                     ocrResult.confidence || null,
@@ -693,6 +786,72 @@ class KYCController {
                 error: 'Failed to perform face matching',
                 message: error.message 
             });
+        }
+    }
+
+    async uploadUserPhoto(req, res) {
+        try {
+            const { sessionId } = req.body;
+            const file = req.file;
+
+            if (!file) {
+                return res.status(400).json({ error: 'No file uploaded' });
+            }
+
+            if (!sessionId) {
+                return res.status(400).json({ error: 'Session ID is required' });
+            }
+
+            // Verify session exists
+            const sessionResult = await pool.query(
+                'SELECT id FROM kyc_sessions WHERE session_id = $1',
+                [sessionId]
+            );
+
+            if (sessionResult.rows.length === 0) {
+                return res.status(404).json({ error: 'Session not found' });
+            }
+
+            const kycSessionId = sessionResult.rows[0].id;
+
+            // Upload to S3
+            const s3Key = `user-photos/${sessionId}/${Date.now()}-${file.filename}`;
+            let uploadResult;
+            try {
+                uploadResult = await s3Service.uploadFile(file.path, s3Key);
+            } catch (s3Error) {
+                console.error('S3 upload failed:', s3Error);
+                // Clean up local file
+                if (fs.existsSync(file.path)) {
+                    fs.unlinkSync(file.path);
+                }
+                throw new Error('Failed to upload user photo to storage');
+            }
+
+            // Update session with user photo
+            const updateResult = await pool.query(
+                `UPDATE kyc_sessions 
+                SET user_photo_url = $1,
+                    user_photo_s3_key = $2,
+                    updated_at = NOW()
+                WHERE id = $3
+                RETURNING *`,
+                [uploadResult.url, s3Key, kycSessionId]
+            );
+
+            // Clean up local file
+            if (fs.existsSync(file.path)) {
+                fs.unlinkSync(file.path);
+            }
+
+            res.json({
+                success: true,
+                session: updateResult.rows[0],
+                userPhotoUrl: uploadResult.url
+            });
+        } catch (error) {
+            console.error('Upload user photo error:', error);
+            res.status(500).json({ error: 'Failed to upload user photo', details: error.message });
         }
     }
 }

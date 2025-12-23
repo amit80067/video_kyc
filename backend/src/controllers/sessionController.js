@@ -150,9 +150,15 @@ class SessionController {
         try {
             const { sessionId } = req.params;
             const { agentId } = req.body;
+            const userRole = req.user.role;
+            const userId = req.user.id;
 
-            if (!agentId) {
-                return res.status(400).json({ error: 'Agent ID is required' });
+            // Use agentId from body if provided (admin assigning), otherwise use logged-in user's ID (agent self-assigning)
+            const targetAgentId = agentId || userId;
+
+            // Only agents can self-assign, admin can assign to any agent
+            if (!agentId && userRole !== 'agent') {
+                return res.status(400).json({ error: 'Agent ID is required for admin users' });
             }
 
             // First check if session exists and is available
@@ -168,7 +174,7 @@ class SessionController {
             const session = sessionCheck.rows[0];
 
             // Check if session is already in progress with another agent
-            if (session.status === 'in_progress' && session.agent_id && session.agent_id !== agentId) {
+            if (session.status === 'in_progress' && session.agent_id && session.agent_id !== targetAgentId) {
                 return res.status(403).json({ error: 'Session is already in progress with another agent' });
             }
 
@@ -183,7 +189,7 @@ class SessionController {
                 SET agent_id = $1, updated_at = NOW()
                 WHERE session_id = $2 AND (agent_id IS NULL OR agent_id = $1)
                 RETURNING *`,
-                [agentId, sessionId]
+                [targetAgentId, sessionId]
             );
 
             if (result.rows.length === 0) {

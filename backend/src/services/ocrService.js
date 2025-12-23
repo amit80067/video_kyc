@@ -91,9 +91,51 @@ class OCRService {
         const extractedText = result.text.toUpperCase();
 
         // Extract Aadhaar number (12 digits, may have spaces)
-        const aadhaarRegex = /\d{4}\s?\d{4}\s?\d{4}/;
-        const aadhaarMatch = extractedText.match(aadhaarRegex);
-        const aadhaarNumber = aadhaarMatch ? aadhaarMatch[0].replace(/\s/g, '') : null;
+        // Use word boundaries to find proper 12-digit numbers
+        const aadhaarPatterns = [
+            /\b(\d{4}\s\d{4}\s\d{4})\b/g,  // Standard format with spaces
+            /\b(\d{4}\s?\d{4}\s?\d{4})\b/g  // With optional spaces
+        ];
+        
+        let aadhaarNumber = null;
+        let allMatches = [];
+        
+        // Find all possible matches
+        for (const pattern of aadhaarPatterns) {
+            const matches = extractedText.match(pattern);
+            if (matches) {
+                allMatches = allMatches.concat(matches);
+            }
+        }
+        
+        // Filter out invalid numbers (like phone numbers, dates, etc.)
+        if (allMatches.length > 0) {
+            const uniqueMatches = [...new Set(allMatches)];
+            
+            // Filter out numbers that are likely phone numbers or dates
+            const validAadhaar = uniqueMatches.filter(match => {
+                const cleaned = match.replace(/\s/g, '');
+                if (cleaned.length !== 12) return false;
+                if (match.includes('/') || match.includes('-')) return false;
+                // Check if it's near "MOBILE" or "PHONE" - likely phone number
+                const matchIndex = extractedText.indexOf(match);
+                const context = extractedText.substring(Math.max(0, matchIndex - 20), matchIndex + 30).toUpperCase();
+                if (context.includes('MOBILE') || context.includes('PHONE') || context.includes('NO.')) {
+                    // Prefer standard Aadhaar format with spaces
+                    return match.includes(' ') && match.split(' ').length === 3;
+                }
+                return true;
+            });
+            
+            // Prefer the one with proper spacing (standard Aadhaar format)
+            if (validAadhaar.length > 0) {
+                const withSpaces = validAadhaar.find(m => m.split(' ').length === 3);
+                aadhaarNumber = (withSpaces || validAadhaar[0]).replace(/\s/g, '');
+            } else if (uniqueMatches.length > 0) {
+                // Fallback to first match if no valid ones found
+                aadhaarNumber = uniqueMatches[0].replace(/\s/g, '');
+            }
+        }
 
         // Extract name (usually after "Name:" or "NAME:")
         const namePatterns = [
@@ -142,12 +184,121 @@ class OCRService {
             }
         }
 
+        // Extract Gender
+        const genderPatterns = [
+            /Gender[:\s]+(Male|Female|M|F|MALE|FEMALE)/i,
+            /Sex[:\s]+(Male|Female|M|F|MALE|FEMALE)/i,
+            /(Male|Female)/i
+        ];
+
+        let gender = null;
+        for (const pattern of genderPatterns) {
+            const match = extractedText.match(pattern);
+            if (match) {
+                gender = match[1] ? match[1].trim() : match[0].trim();
+                // Normalize gender
+                if (gender.toUpperCase() === 'M' || gender.toUpperCase() === 'MALE') {
+                    gender = 'Male';
+                } else if (gender.toUpperCase() === 'F' || gender.toUpperCase() === 'FEMALE') {
+                    gender = 'Female';
+                }
+                break;
+            }
+        }
+
         return {
             ...result,
             aadhaarNumber: aadhaarNumber,
             name: name,
             dateOfBirth: dateOfBirth,
+            gender: gender,
             address: address,
+            extractedText: extractedText
+        };
+    }
+
+    /**
+     * Extract PAN card data
+     */
+    async extractPANData(imagePath) {
+        const result = await this.extractText(imagePath, {
+            lang: 'eng',
+            whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ /-',
+            psm: 6 // Single uniform block
+        });
+
+        // Parse PAN data
+        const extractedText = result.text.toUpperCase();
+
+        // Extract PAN number (format: ABCDE1234F)
+        const panRegex = /[A-Z]{5}\d{4}[A-Z]{1}/;
+        const panMatch = extractedText.match(panRegex);
+        const panNumber = panMatch ? panMatch[0] : null;
+
+        // Extract Name (usually appears after "INCOME TAX DEPARTMENT" or "GOVT. OF INDIA")
+        const namePatterns = [
+            /(?:INCOME TAX DEPARTMENT|GOVT\.?\s*OF\s*INDIA)[\s\S]{0,100}?([A-Z]{2,}\s+[A-Z]{2,}(?:\s+[A-Z]{2,})?)/,
+            /Name[:\s]+([A-Z\s]{3,50})/i,
+            /([A-Z]{2,}\s+[A-Z]{2,}(?:\s+[A-Z]{2,})?)/,
+            /(?:Name of|Name)[\s\S]{0,50}?([A-Z]{2,}\s+[A-Z]{2,})/
+        ];
+
+        let name = null;
+        for (const pattern of namePatterns) {
+            const match = extractedText.match(pattern);
+            if (match) {
+                name = match[1] ? match[1].trim() : match[0].trim();
+                // Remove common prefixes
+                name = name.replace(/^(INCOME TAX DEPARTMENT|GOVT\.?\s*OF\s*INDIA|Name|Name of)/i, '').trim();
+                if (name.length > 3 && name.length < 50) {
+                    break;
+                }
+            }
+        }
+
+        // Extract Father's Name
+        const fatherNamePatterns = [
+            /Father['\s]?s?\s*Name[:\s]+([A-Z\s]{3,50})/i,
+            /Father[:\s]+([A-Z\s]{3,50})/i,
+            /(?:Father|Father's Name)[\s\S]{0,50}?([A-Z]{2,}\s+[A-Z]{2,})/
+        ];
+
+        let fatherName = null;
+        for (const pattern of fatherNamePatterns) {
+            const match = extractedText.match(pattern);
+            if (match) {
+                fatherName = match[1] ? match[1].trim() : match[0].trim();
+                // Remove common prefixes
+                fatherName = fatherName.replace(/^(Father|Father's Name|Father's)/i, '').trim();
+                if (fatherName.length > 3 && fatherName.length < 50) {
+                    break;
+                }
+            }
+        }
+
+        // Extract Date of Birth
+        const dobPatterns = [
+            /Date of Birth[:\s]+(\d{2}[\/\-]\d{2}[\/\-]\d{4})/i,
+            /DOB[:\s]+(\d{2}[\/\-]\d{2}[\/\-]\d{4})/i,
+            /(\d{2}[\/\-]\d{2}[\/\-]\d{4})/,
+            /Birth[:\s]+(\d{2}[\/\-]\d{2}[\/\-]\d{4})/i
+        ];
+
+        let dateOfBirth = null;
+        for (const pattern of dobPatterns) {
+            const match = extractedText.match(pattern);
+            if (match) {
+                dateOfBirth = match[1] || match[0];
+                break;
+            }
+        }
+
+        return {
+            ...result,
+            panNumber: panNumber,
+            name: name,
+            fatherName: fatherName,
+            dateOfBirth: dateOfBirth,
             extractedText: extractedText
         };
     }

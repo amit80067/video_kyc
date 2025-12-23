@@ -178,35 +178,72 @@ class ExportController {
                     doc.moveDown(0.2);
                     
                     // OCR Extracted Data - check ocr_extracted_data JSON first
-                    let aadhaarNum, name, dob;
+                    let ocrData = {};
                     if (document.ocr_extracted_data) {
                         try {
-                            const ocrData = typeof document.ocr_extracted_data === 'string' 
+                            ocrData = typeof document.ocr_extracted_data === 'string' 
                                 ? JSON.parse(document.ocr_extracted_data) 
                                 : document.ocr_extracted_data;
-                            
-                            aadhaarNum = ocrData.aadhaarNumber || document.aadhaar_number || 'N/A';
-                            name = ocrData.name || document.name || 'N/A';
-                            dob = ocrData.dateOfBirth || document.date_of_birth || 'N/A';
                         } catch (err) {
-                            aadhaarNum = document.aadhaar_number || 'N/A';
-                            name = document.name || 'N/A';
-                            dob = document.date_of_birth || 'N/A';
+                            console.error('Error parsing OCR data:', err);
                         }
-                    } else {
-                        aadhaarNum = document.aadhaar_number || 'N/A';
-                        name = document.name || 'N/A';
-                        dob = document.date_of_birth || 'N/A';
                     }
                     
-                    doc.font('Helvetica-Bold').text('Aadhaar Number:', { continued: true });
-                    doc.font('Helvetica').text(` ${aadhaarNum}`);
+                    // Extract fields based on document type
+                    const isPAN = document.document_type.toLowerCase() === 'pan';
+                    const isAadhaar = document.document_type.toLowerCase() === 'aadhaar';
                     
-                    doc.font('Helvetica-Bold').text('Name:', { continued: true });
-                    doc.font('Helvetica').text(` ${name}`);
-                    
-                    doc.font('Helvetica-Bold').text('Date of Birth:', { continued: true });
-                    doc.font('Helvetica').text(` ${dob}`);
+                    if (isPAN) {
+                        // PAN Card fields
+                        const panNumber = ocrData.panNumber || document.aadhaar_number || 'N/A';
+                        const name = ocrData.name || document.name || 'N/A';
+                        const fatherName = ocrData.fatherName || 'N/A';
+                        const dob = ocrData.dateOfBirth || document.date_of_birth || 'N/A';
+                        
+                        doc.font('Helvetica-Bold').text('PAN Number:', { continued: true });
+                        doc.font('Helvetica').text(` ${panNumber}`);
+                        
+                        doc.font('Helvetica-Bold').text('Name:', { continued: true });
+                        doc.font('Helvetica').text(` ${name}`);
+                        
+                        doc.font('Helvetica-Bold').text('Father Name:', { continued: true });
+                        doc.font('Helvetica').text(` ${fatherName}`);
+                        
+                        doc.font('Helvetica-Bold').text('Date of Birth:', { continued: true });
+                        doc.font('Helvetica').text(` ${dob}`);
+                    } else if (isAadhaar) {
+                        // Aadhaar Card fields
+                        const aadhaarNum = ocrData.aadhaarNumber || document.aadhaar_number || 'N/A';
+                        const name = ocrData.name || document.name || 'N/A';
+                        const dob = ocrData.dateOfBirth || document.date_of_birth || 'N/A';
+                        const gender = ocrData.gender || 'N/A';
+                        
+                        doc.font('Helvetica-Bold').text('Aadhaar Number:', { continued: true });
+                        doc.font('Helvetica').text(` ${aadhaarNum}`);
+                        
+                        doc.font('Helvetica-Bold').text('Name:', { continued: true });
+                        doc.font('Helvetica').text(` ${name}`);
+                        
+                        doc.font('Helvetica-Bold').text('Date of Birth:', { continued: true });
+                        doc.font('Helvetica').text(` ${dob}`);
+                        
+                        doc.font('Helvetica-Bold').text('Gender:', { continued: true });
+                        doc.font('Helvetica').text(` ${gender}`);
+                    } else {
+                        // Generic document fields
+                        const docNumber = ocrData.aadhaarNumber || ocrData.panNumber || document.aadhaar_number || 'N/A';
+                        const name = ocrData.name || document.name || 'N/A';
+                        const dob = ocrData.dateOfBirth || document.date_of_birth || 'N/A';
+                        
+                        doc.font('Helvetica-Bold').text('Document Number:', { continued: true });
+                        doc.font('Helvetica').text(` ${docNumber}`);
+                        
+                        doc.font('Helvetica-Bold').text('Name:', { continued: true });
+                        doc.font('Helvetica').text(` ${name}`);
+                        
+                        doc.font('Helvetica-Bold').text('Date of Birth:', { continued: true });
+                        doc.font('Helvetica').text(` ${dob}`);
+                    }
                     
                     doc.font('Helvetica-Bold').text('Verification Status:', { continued: true });
                     doc.font('Helvetica').text(` ${document.verification_status.toUpperCase()}`);
