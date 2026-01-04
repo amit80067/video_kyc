@@ -1,6 +1,7 @@
 const pool = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const smsService = require('../services/smsService');
+const emailService = require('../services/emailService');
 
 class SessionController {
     async createSession(req, res) {
@@ -55,11 +56,40 @@ class SessionController {
                 console.log('No phone number provided, skipping SMS');
             }
 
+            // Send Email to user with verification link
+            let emailSent = false;
+            let emailError = null;
+            
+            if (userEmail && emailService.isAvailable()) {
+                try {
+                    console.log(`Attempting to send email for session ${sessionId} to ${userEmail}`);
+                    const emailResult = await emailService.sendVerificationEmail(userEmail, userName, joinLink);
+                    emailSent = emailResult.success;
+                    console.log(`✅ Email sent successfully to ${userEmail} for session ${sessionId}`);
+                } catch (emailErr) {
+                    // Log error but don't fail the session creation
+                    emailError = emailErr.message || 'Unknown email error';
+                    console.error(`❌ Failed to send email to ${userEmail}:`, emailErr);
+                    console.error('Email Error details:', {
+                        message: emailErr.message,
+                        stack: emailErr.stack
+                    });
+                    // Session created successfully, just email failed
+                }
+            } else if (userEmail && !emailService.isAvailable()) {
+                console.warn('⚠️ Email service not available. Brevo API key missing or not initialized.');
+                emailError = 'Email service not available';
+            } else if (!userEmail) {
+                console.log('No email address provided, skipping email');
+            }
+
             res.status(201).json({
                 success: true,
                 session: result.rows[0],
                 smsSent: smsSent,
-                smsError: smsError || null
+                smsError: smsError || null,
+                emailSent: emailSent,
+                emailError: emailError || null
             });
         } catch (error) {
             console.error('Create session error:', error);

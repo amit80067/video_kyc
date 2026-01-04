@@ -31,6 +31,16 @@ AWS_ACCESS_KEY_ID=your_aws_access_key_id
 AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
 AWS_REGION=ap-south-1
 S3_BUCKET_NAME=videokyc1
+
+# Email Service (Brevo)
+BREVO_API_KEY=your_brevo_api_key
+BREVO_FROM_EMAIL=noreply@virtualinvestigation.xyz
+BREVO_FROM_NAME=Virtual Investigation
+
+# SMS Service (Twilio - Optional)
+TWILIO_ACCOUNT_SID=your_twilio_account_sid
+TWILIO_AUTH_TOKEN=your_twilio_auth_token
+TWILIO_PHONE_NUMBER=your_twilio_phone_number
 ```
 
 ---
