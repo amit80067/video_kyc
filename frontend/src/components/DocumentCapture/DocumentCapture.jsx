@@ -20,6 +20,7 @@ const DocumentCapture = ({ sessionId, remoteStream, onBack, onUploaded }) => {
   const [error, setError] = useState(null);
   const [documentType, setDocumentType] = useState('aadhaar');
   const [captureMode, setCaptureMode] = useState('document'); // 'document' or 'userPhoto'
+  const [remark, setRemark] = useState('');
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
@@ -179,6 +180,7 @@ const DocumentCapture = ({ sessionId, remoteStream, onBack, onUploaded }) => {
       setCapturedUserPhoto(null);
     } else {
       setCapturedImage(null);
+      setRemark(''); // Clear remark when retaking
     }
     setUploaded(false);
     // Restore video stream (remoteStream if available, otherwise agent's camera)
@@ -230,6 +232,9 @@ const DocumentCapture = ({ sessionId, remoteStream, onBack, onUploaded }) => {
         formData.append('document', file);
         formData.append('sessionId', sessionId);
         formData.append('documentType', documentType);
+        if (remark && remark.trim()) {
+          formData.append('remark', remark.trim());
+        }
 
         await api.post('/kyc/documents/upload', formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
@@ -237,6 +242,7 @@ const DocumentCapture = ({ sessionId, remoteStream, onBack, onUploaded }) => {
 
         setUploaded(true);
         setCapturedImage(null);
+        setRemark(''); // Clear remark after upload
         
         // Document uploaded callback
         if (onUploaded) {
@@ -384,24 +390,40 @@ const DocumentCapture = ({ sessionId, remoteStream, onBack, onUploaded }) => {
                 {capturedUserPhoto ? 'User photo uploaded successfully!' : 'Document uploaded successfully!'}
               </Alert>
             ) : (
-              captureMode === 'document' && (
-                <TextField
-                  select
-                  fullWidth
-                  label="Document Type"
-                  value={documentType}
-                  onChange={(e) => setDocumentType(e.target.value)}
-                  sx={{ mb: 2 }}
-                  SelectProps={{
-                    native: true,
-                  }}
-                >
-                  <option value="aadhaar">Aadhaar Card</option>
-                  <option value="pan">PAN Card</option>
-                  <option value="passport">Passport</option>
-                  <option value="other">Other</option>
-                </TextField>
-              )
+              <>
+                {/* Document Type - only for documents */}
+                {capturedImage && !capturedUserPhoto && (
+                  <TextField
+                    select
+                    fullWidth
+                    label="Document Type"
+                    value={documentType}
+                    onChange={(e) => setDocumentType(e.target.value)}
+                    sx={{ mb: 2 }}
+                    SelectProps={{
+                      native: true,
+                    }}
+                  >
+                    <option value="aadhaar">Aadhaar Card</option>
+                    <option value="pan">PAN Card</option>
+                    <option value="passport">Passport</option>
+                    <option value="other">Other</option>
+                  </TextField>
+                )}
+                {/* Remark Field - only for documents, always show after capture */}
+                {capturedImage && !capturedUserPhoto && (
+                  <TextField
+                    fullWidth
+                    label="Remark (Optional)"
+                    placeholder="Add any remarks or notes about this document..."
+                    value={remark}
+                    onChange={(e) => setRemark(e.target.value)}
+                    multiline
+                    rows={3}
+                    sx={{ mb: 2 }}
+                  />
+                )}
+              </>
             )}
 
             <Box sx={{ display: 'flex', gap: 2 }}>

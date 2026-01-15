@@ -10,7 +10,7 @@ const fs = require('fs');
 class KYCController {
     async uploadDocument(req, res) {
         try {
-            const { sessionId, documentType } = req.body;
+            const { sessionId, documentType, remark } = req.body;
             const file = req.file;
 
             if (!file) {
@@ -63,10 +63,10 @@ class KYCController {
             // Save to database
             const result = await pool.query(
                 `INSERT INTO documents 
-                (session_id, document_type, image_url, s3_key, verification_status)
-                VALUES ($1, $2, $3, $4, $5)
+                (session_id, document_type, image_url, s3_key, verification_status, remark)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING *`,
-                [kycSessionId, documentType, uploadResult.url, s3Key, 'pending']
+                [kycSessionId, documentType, uploadResult.url, s3Key, 'pending', remark || null]
             );
 
             const document = result.rows[0];
@@ -522,15 +522,31 @@ class KYCController {
     async uploadRecording(req, res) {
         let tempFilePath = null;
         try {
-            const { sessionId } = req.body;
+            // Get sessionId from body (multer parses multipart/form-data fields into req.body)
+            const sessionId = req.body?.sessionId;
             const file = req.file;
+
+            console.log('📥 Upload recording request received:', {
+                hasFile: !!file,
+                sessionId: sessionId,
+                bodyKeys: Object.keys(req.body || {}),
+                body: req.body
+            });
 
             if (!file) {
                 return res.status(400).json({ error: 'No video file uploaded' });
             }
 
-            if (!sessionId) {
-                return res.status(400).json({ error: 'Session ID is required' });
+            if (!sessionId || sessionId === 'null' || sessionId === 'undefined') {
+                console.error('❌ Session ID is missing or invalid:', {
+                    sessionId: sessionId,
+                    type: typeof sessionId,
+                    body: req.body
+                });
+                return res.status(400).json({ 
+                    error: 'Session ID is required',
+                    details: 'sessionId is missing or null in request body'
+                });
             }
 
             tempFilePath = file.path;
@@ -583,19 +599,50 @@ class KYCController {
                 });
             }
 
-            // Save to database
-            const result = await pool.query(
-                `INSERT INTO video_recordings 
-                (session_id, video_url, s3_key, file_size_bytes, recording_started_at, recording_ended_at)
-                VALUES ($1, $2, $3, $4, NOW(), NOW())
-                RETURNING *`,
-                [
-                    kycSessionId,
-                    recordingResult.s3Url,
-                    recordingResult.s3Key,
-                    recordingResult.fileSizeBytes
-                ]
-            );
+            // Save to database (default recording_type is 'video')
+            // First ensure column exists (if migration not run yet)
+            try {
+                await pool.query(`ALTER TABLE video_recordings ADD COLUMN IF NOT EXISTS recording_type VARCHAR(20) DEFAULT 'video'`);
+            } catch (colErr) {
+                // Column might already exist or permission issue - continue anyway
+                console.log('Note: recording_type column check:', colErr.message);
+            }
+            
+            // Try with recording_type first, fallback to without if column doesn't exist
+            let result;
+            try {
+                result = await pool.query(
+                    `INSERT INTO video_recordings 
+                    (session_id, video_url, s3_key, file_size_bytes, recording_type, recording_started_at, recording_ended_at)
+                    VALUES ($1, $2, $3, $4, 'video', NOW(), NOW())
+                    RETURNING *`,
+                    [
+                        kycSessionId,
+                        recordingResult.s3Url,
+                        recordingResult.s3Key,
+                        recordingResult.fileSizeBytes
+                    ]
+                );
+            } catch (insertErr) {
+                // If column doesn't exist, insert without it
+                if (insertErr.message.includes('recording_type') || insertErr.message.includes('column')) {
+                    console.log('Inserting without recording_type column (will be added later)');
+                    result = await pool.query(
+                        `INSERT INTO video_recordings 
+                        (session_id, video_url, s3_key, file_size_bytes, recording_started_at, recording_ended_at)
+                        VALUES ($1, $2, $3, $4, NOW(), NOW())
+                        RETURNING *`,
+                        [
+                            kycSessionId,
+                            recordingResult.s3Url,
+                            recordingResult.s3Key,
+                            recordingResult.fileSizeBytes
+                        ]
+                    );
+                } else {
+                    throw insertErr;
+                }
+            }
 
             // Clean up local file
             if (fs.existsSync(tempFilePath)) {
@@ -626,6 +673,163 @@ class KYCController {
                 details: process.env.NODE_ENV === 'development' ? errorMessage : undefined,
                 stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
             });
+        }
+    }
+
+    /**
+     * Upload screen recording
+     */
+    async uploadScreenRecording(req, res) {
+        let tempFilePath = null;
+        try {
+            // Get sessionId from body (multer parses multipart/form-data fields into req.body)
+            const sessionId = req.body?.sessionId;
+            const recordingType = req.body?.recordingType || 'screen';
+            const file = req.file;
+
+            console.log('📥 Upload screen recording request received:', {
+                hasFile: !!file,
+                sessionId: sessionId,
+                recordingType: recordingType,
+                bodyKeys: Object.keys(req.body || {}),
+                body: req.body
+            });
+
+            if (!file) {
+                return res.status(400).json({ error: 'No video file uploaded' });
+            }
+
+            if (!sessionId || sessionId === 'null' || sessionId === 'undefined') {
+                console.error('❌ Session ID is missing or invalid:', {
+                    sessionId: sessionId,
+                    type: typeof sessionId,
+                    body: req.body
+                });
+                return res.status(400).json({ 
+                    error: 'Session ID is required',
+                    details: 'sessionId is missing or null in request body'
+                });
+            }
+
+            tempFilePath = file.path;
+
+            // Verify session exists
+            const sessionResult = await pool.query(
+                'SELECT id FROM kyc_sessions WHERE session_id = $1',
+                [sessionId]
+            );
+
+            if (sessionResult.rows.length === 0) {
+                if (fs.existsSync(tempFilePath)) {
+                    fs.unlinkSync(tempFilePath);
+                }
+                return res.status(404).json({ error: 'Session not found' });
+            }
+
+            const kycSessionId = sessionResult.rows[0].id;
+
+            // Save screen recording to S3
+            let recordingResult;
+            try {
+                recordingResult = await videoRecordingService.saveRecording(file.path, sessionId);
+            } catch (s3Error) {
+                console.error('S3 upload failed for screen recording:', s3Error);
+                if (fs.existsSync(tempFilePath)) {
+                    fs.unlinkSync(tempFilePath);
+                }
+                return res.status(500).json({ 
+                    error: 'Failed to upload screen recording',
+                    details: s3Error.message
+                });
+            }
+
+            // Save to database with recording_type = 'screen'
+            // Check if recording_type column exists
+            let hasRecordingTypeColumn = false;
+            try {
+                const colCheck = await pool.query(
+                    `SELECT column_name FROM information_schema.columns 
+                     WHERE table_name = 'video_recordings' AND column_name = 'recording_type'`
+                );
+                hasRecordingTypeColumn = colCheck.rows.length > 0;
+            } catch (e) {
+                // Ignore check errors
+            }
+            
+            let result;
+            if (hasRecordingTypeColumn) {
+                result = await pool.query(
+                    `INSERT INTO video_recordings 
+                    (session_id, video_url, s3_key, file_size_bytes, recording_type, recording_started_at, recording_ended_at)
+                    VALUES ($1, $2, $3, $4, 'screen', NOW(), NOW())
+                    RETURNING *`,
+                    [
+                        kycSessionId,
+                        recordingResult.s3Url,
+                        recordingResult.s3Key,
+                        recordingResult.fileSizeBytes
+                    ]
+                );
+            } else {
+                // Insert without recording_type column (will be added later by admin)
+                // For now, we'll store it in a comment or separate table, but for simplicity, just insert without it
+                console.warn('⚠️ recording_type column not found - screen recording saved without type');
+                result = await pool.query(
+                    `INSERT INTO video_recordings 
+                    (session_id, video_url, s3_key, file_size_bytes, recording_started_at, recording_ended_at)
+                    VALUES ($1, $2, $3, $4, NOW(), NOW())
+                    RETURNING *`,
+                    [
+                        kycSessionId,
+                        recordingResult.s3Url,
+                        recordingResult.s3Key,
+                        recordingResult.fileSizeBytes
+                    ]
+                );
+            }
+
+            // Clean up local file
+            if (fs.existsSync(tempFilePath)) {
+                fs.unlinkSync(tempFilePath);
+            }
+
+            res.status(201).json({
+                success: true,
+                recording: result.rows[0],
+                recordingId: result.rows[0].id
+            });
+        } catch (error) {
+            console.error('Upload screen recording error:', error);
+            if (tempFilePath && fs.existsSync(tempFilePath)) {
+                try {
+                    fs.unlinkSync(tempFilePath);
+                } catch (cleanupError) {
+                    console.error('Failed to cleanup file:', cleanupError);
+                }
+            }
+            res.status(500).json({ 
+                error: 'Failed to upload screen recording',
+                details: process.env.NODE_ENV === 'development' ? error.message : undefined
+            });
+        }
+    }
+
+    /**
+     * Generate PDF for session (delegates to exportController)
+     */
+    async generatePDF(req, res) {
+        try {
+            // Use existing generatePDF method from exportController
+            const exportController = require('./exportController');
+            await exportController.generatePDF(req, res);
+        } catch (error) {
+            console.error('Generate PDF error:', error);
+            if (!res.headersSent) {
+                res.status(500).json({ 
+                    error: 'Failed to generate PDF',
+                    details: process.env.NODE_ENV === 'development' ? error.message : undefined
+                });
+            }
         }
     }
 

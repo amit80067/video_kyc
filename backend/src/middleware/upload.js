@@ -20,13 +20,22 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-    // Allow images and videos
-    const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'video/webm', 'video/mp4'];
+    // Allow images, videos, and CSV/Excel files
+    const allowedMimes = [
+        'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 
+        'video/webm', 'video/mp4',
+        'text/csv', 'application/vnd.ms-excel', 
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    ];
     
-    if (allowedMimes.includes(file.mimetype)) {
+    // Also check file extension for CSV/Excel
+    const ext = path.extname(file.originalname).toLowerCase();
+    const allowedExts = ['.csv', '.xlsx', '.xls'];
+    
+    if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
         cb(null, true);
     } else {
-        cb(new Error('Invalid file type. Only images and videos are allowed.'), false);
+        cb(new Error('Invalid file type. Only images, videos, CSV, and Excel files are allowed.'), false);
     }
 };
 

@@ -16,9 +16,20 @@ class WebRTCService {
     this.recordedChunks = [];
     this.statsInterval = null;
     this.onStatsUpdate = null;
-    this.currentVideoQuality = 'medium'; // Start with medium, upgrade to 'high' only on excellent network
+    this.currentVideoQuality = 'high'; // Start with high quality for better video clarity
     this.qualityAdjustmentInterval = null;
     this.lastNetworkQuality = 'unknown';
+    this.recordingCanvas = null;
+    this.recordingCanvasContext = null;
+    this.recordingAnimationFrame = null;
+    this.localVideoElement = null;
+    this.remoteVideoElement = null;
+    // Screen recording properties
+    this.screenStream = null;
+    this.screenRecorder = null;
+    this.screenRecordedChunks = [];
+    this.isScreenRecording = false;
+    this.onScreenRecordingComplete = null;
   }
 
   /**
@@ -752,9 +763,12 @@ class WebRTCService {
   }
 
   /**
-   * Start video recording
+   * Start video recording - records both local and remote streams in one video
    */
   startRecording() {
+    // #region agent log
+    fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:768',message:'startRecording called',data:{hasLocalStream:!!this.localStream,hasRemoteStream:!!this.remoteStream,remoteTracks:this.remoteStream?.getTracks()?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     if (!this.localStream) {
       console.error('Cannot start recording: No local stream available');
       throw new Error('No local stream available');
@@ -770,67 +784,404 @@ class WebRTCService {
     }
 
     console.log('Starting recording with', videoTracks.length, 'video tracks and', audioTracks.length, 'audio tracks');
-
-    this.recordedChunks = [];
-    const options = {
-      mimeType: 'video/webm;codecs=vp8,opus',
-    };
-
-    try {
-      // Check if MediaRecorder supports the mimeType
-      if (MediaRecorder.isTypeSupported(options.mimeType)) {
-        this.mediaRecorder = new MediaRecorder(this.localStream, options);
-        console.log('MediaRecorder created with mimeType:', options.mimeType);
-      } else {
-        console.warn('MimeType not supported, using default');
-        this.mediaRecorder = new MediaRecorder(this.localStream);
-      }
-    } catch (error) {
-      console.error('MediaRecorder creation error:', error);
-      // Fallback to default
-      this.mediaRecorder = new MediaRecorder(this.localStream);
+    console.log('Remote stream available:', !!this.remoteStream);
+    // #region agent log
+    fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:785',message:'Stream tracks check',data:{localVideoTracks:videoTracks.length,localAudioTracks:audioTracks.length,hasRemoteStream:!!this.remoteStream,remoteTracksCount:this.remoteStream?.getTracks()?.length||0,remoteVideoTracks:this.remoteStream?.getVideoTracks()?.length||0,remoteAudioTracks:this.remoteStream?.getAudioTracks()?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
+    if (this.remoteStream) {
+      console.log('Remote stream tracks:', this.remoteStream.getTracks().length, 
+                  'video:', this.remoteStream.getVideoTracks().length,
+                  'audio:', this.remoteStream.getAudioTracks().length);
     }
 
-    this.mediaRecorder.ondataavailable = (event) => {
-      console.log('Data available event, size:', event.data.size, 'bytes');
-      if (event.data.size > 0) {
-        this.recordedChunks.push(event.data);
-        console.log('Chunk added, total chunks:', this.recordedChunks.length);
-      }
+    // Clean up any existing recording elements first
+    if (this.localVideoElement) {
+      this.localVideoElement.srcObject = null;
+      this.localVideoElement = null;
+    }
+    if (this.remoteVideoElement) {
+      this.remoteVideoElement.srcObject = null;
+      this.remoteVideoElement = null;
+    }
+    if (this.recordingCanvas) {
+      this.recordingCanvas = null;
+      this.recordingCanvasContext = null;
+    }
+
+    // Create canvas for combining both videos
+    this.recordingCanvas = document.createElement('canvas');
+    this.recordingCanvas.width = 1920; // Full HD width for better quality
+    this.recordingCanvas.height = 1080; // Full HD height for better quality
+    this.recordingCanvasContext = this.recordingCanvas.getContext('2d');
+    
+    // Create temporary video elements for recording
+    this.localVideoElement = document.createElement('video');
+    this.localVideoElement.srcObject = this.localStream;
+    this.localVideoElement.muted = true; // Local audio will be from stream
+    this.localVideoElement.autoplay = true;
+    this.localVideoElement.playsInline = true;
+    this.localVideoElement.play().catch(err => console.error('Error playing local video for recording:', err));
+
+    if (this.remoteStream && this.remoteStream.getTracks().length > 0) {
+      console.log('Creating remote video element for recording...');
+      // #region agent log
+      fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:819',message:'Creating remote video element',data:{hasRemoteStream:!!this.remoteStream,remoteTracks:this.remoteStream.getTracks().length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      this.remoteVideoElement = document.createElement('video');
+      this.remoteVideoElement.srcObject = this.remoteStream;
+      this.remoteVideoElement.muted = false; // Remote audio will be captured
+      this.remoteVideoElement.autoplay = true;
+      this.remoteVideoElement.playsInline = true;
+      this.remoteVideoElement.play().then(() => {
+        // #region agent log
+        fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:826',message:'Remote video play success',data:{readyState:this.remoteVideoElement?.readyState},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+        // #endregion
+      }).catch(err => {
+        // #region agent log
+        fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:826',message:'Remote video play failed',data:{error:err.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+        // #endregion
+        console.error('Error playing remote video for recording:', err);
+      });
+      console.log('Remote video element created and playing');
+    } else {
+      // #region agent log
+      fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:830',message:'No remote stream for recording',data:{hasRemoteStream:!!this.remoteStream,remoteTracks:this.remoteStream?.getTracks()?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      console.log('No remote stream available, recording with local stream only');
+      this.remoteVideoElement = null;
+    }
+
+    // Wait for videos to be ready before starting recording
+    const waitForVideos = () => {
+      return new Promise((resolve) => {
+        let attempts = 0;
+        const maxAttempts = 100; // 10 seconds max wait
+        
+        const checkReady = () => {
+          attempts++;
+          const localReady = this.localVideoElement && this.localVideoElement.readyState >= 2;
+          const hasRemoteStream = this.remoteStream && this.remoteStream.getTracks().length > 0;
+          const remoteReady = !hasRemoteStream || (this.remoteVideoElement && this.remoteVideoElement.readyState >= 2);
+          
+          console.log('Checking video readiness...', {
+            localReady,
+            hasRemoteStream,
+            remoteReady,
+            localState: this.localVideoElement?.readyState,
+            remoteState: this.remoteVideoElement?.readyState,
+            attempt: attempts
+          });
+          // #region agent log
+          fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:845',message:'Video readiness check',data:{localReady,hasRemoteStream,remoteReady,localState:this.localVideoElement?.readyState,remoteState:this.remoteVideoElement?.readyState,attempt:attempts},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+          // #endregion
+          
+          if (localReady && remoteReady) {
+            console.log('✅ All videos ready for recording');
+            // #region agent log
+            fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:854',message:'All videos ready',data:{localState:this.localVideoElement?.readyState,remoteState:this.remoteVideoElement?.readyState},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+            // #endregion
+            resolve();
+          } else if (attempts >= maxAttempts) {
+            console.warn('⚠️ Timeout waiting for videos, proceeding anyway...');
+            // #region agent log
+            fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:858',message:'Timeout waiting for videos',data:{localState:this.localVideoElement?.readyState,remoteState:this.remoteVideoElement?.readyState,attempts},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+            // #endregion
+            resolve(); // Proceed even if not fully ready
+          } else {
+            setTimeout(checkReady, 100);
+          }
+        };
+        checkReady();
+      });
     };
 
-    this.mediaRecorder.onerror = (event) => {
-      console.error('MediaRecorder error:', event.error);
-    };
-
-    this.mediaRecorder.onstop = () => {
-      console.log('MediaRecorder stopped, chunks:', this.recordedChunks.length);
-      if (this.recordedChunks.length > 0) {
-        const blob = new Blob(this.recordedChunks, { type: 'video/webm' });
-        console.log('Recording blob created, size:', blob.size, 'bytes');
-        if (this.onRecordingComplete) {
-          console.log('Calling onRecordingComplete callback');
-          this.onRecordingComplete(blob);
-        } else {
-          console.warn('onRecordingComplete callback not set!');
+    // Wait for videos to be ready
+    const setupRecording = async () => {
+      // Wait for video elements to be ready
+      await waitForVideos();
+      // Create combined stream from canvas FIRST (before drawing starts)
+      // Canvas stream needs to be captured before drawing starts for proper initialization
+      const combinedStream = this.recordingCanvas.captureStream(30); // 30 FPS
+      
+      // Function to draw both videos on canvas (side by side)
+      let drawCount = 0;
+      const drawVideos = () => {
+        drawCount++;
+        if (!this.recordingCanvasContext || !this.isRecording) {
+          // #region agent log
+          if (drawCount <= 5) fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:907',message:'drawVideos early return',data:{hasContext:!!this.recordingCanvasContext,isRecording:this.isRecording,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+          // #endregion
+          return;
         }
-      } else {
-        console.warn('No recorded chunks available, recording may have failed');
+        
+        const ctx = this.recordingCanvasContext;
+        const canvas = this.recordingCanvas;
+        
+        // Clear canvas
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        const halfWidth = canvas.width / 2;
+        const fullHeight = canvas.height;
+        
+        let localDrawn = false;
+        let remoteDrawn = false;
+        
+        // Draw local video (left side)
+        if (this.localVideoElement && this.localVideoElement.readyState >= 2) {
+          try {
+            ctx.drawImage(
+              this.localVideoElement,
+              0, 0,
+              halfWidth, fullHeight
+            );
+            localDrawn = true;
+            // #region agent log
+            if (drawCount <= 5 || drawCount % 30 === 0) fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:923',message:'Local video drawn',data:{readyState:this.localVideoElement.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+            // #endregion
+          } catch (err) {
+            // #region agent log
+            fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:928',message:'Error drawing local video',data:{error:err.message,readyState:this.localVideoElement?.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+            // #endregion
+            console.warn('Error drawing local video:', err);
+          }
+        } else {
+          // #region agent log
+          if (drawCount <= 5 || drawCount % 30 === 0) fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:935',message:'Local video not ready for drawing',data:{hasElement:!!this.localVideoElement,readyState:this.localVideoElement?.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+          // #endregion
+        }
+        
+        // Draw remote video (right side)
+        if (this.remoteVideoElement && this.remoteVideoElement.readyState >= 2) {
+          try {
+            ctx.drawImage(
+              this.remoteVideoElement,
+              halfWidth, 0,
+              halfWidth, fullHeight
+            );
+            remoteDrawn = true;
+            // #region agent log
+            if (drawCount <= 5 || drawCount % 30 === 0) fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:945',message:'Remote video drawn',data:{readyState:this.remoteVideoElement.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+            // #endregion
+          } catch (err) {
+            // #region agent log
+            fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:950',message:'Error drawing remote video',data:{error:err.message,readyState:this.remoteVideoElement?.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+            // #endregion
+            console.warn('Error drawing remote video:', err);
+          }
+        } else {
+          // #region agent log
+          if (drawCount <= 5 || drawCount % 30 === 0) fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:957',message:'Remote video not ready for drawing',data:{hasElement:!!this.remoteVideoElement,readyState:this.remoteVideoElement?.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+          // #endregion
+        }
+        
+        // #region agent log
+        if (drawCount === 1 || drawCount % 30 === 0) fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:960',message:'Draw summary',data:{localDrawn,remoteDrawn,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
+        
+        // Draw divider line
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(halfWidth, 0);
+        ctx.lineTo(halfWidth, fullHeight);
+        ctx.stroke();
+        
+        // Continue animation
+        if (this.isRecording) {
+          this.recordingAnimationFrame = requestAnimationFrame(drawVideos);
+        }
+      };
+
+      // Verify stream has tracks
+      const canvasTracks = combinedStream.getVideoTracks();
+      console.log('Canvas stream video tracks:', canvasTracks.length);
+      
+      if (canvasTracks.length === 0) {
+        console.error('Canvas stream has no video tracks!');
+        this.isRecording = false;
+        return;
       }
-      // Clear chunks after processing
-      this.recordedChunks = [];
+      
+      // Add audio tracks from both streams FIRST (before creating MediaRecorder)
+      if (this.localStream) {
+        const localAudioTracks = this.localStream.getAudioTracks();
+        localAudioTracks.forEach(track => {
+          if (track.enabled && track.readyState === 'live') {
+            combinedStream.addTrack(track);
+            console.log('Added local audio track to combined stream');
+          }
+        });
+      }
+      
+      // Use remote audio if available, otherwise use local
+      if (this.remoteStream) {
+        const remoteAudioTracks = this.remoteStream.getAudioTracks();
+        remoteAudioTracks.forEach(track => {
+          if (track.enabled && track.readyState === 'live') {
+            combinedStream.addTrack(track);
+            console.log('Added remote audio track to combined stream');
+          }
+        });
+      }
+      
+      console.log('Combined stream tracks - Video:', combinedStream.getVideoTracks().length, 'Audio:', combinedStream.getAudioTracks().length);
+
+      // Verify canvas stream is active
+      const activeTracks = combinedStream.getVideoTracks().filter(t => t.readyState === 'live');
+      if (activeTracks.length === 0) {
+        console.error('Canvas stream has no active tracks!');
+        this.isRecording = false;
+        return;
+      }
+      
+      // Verify stream is actually producing data
+      const videoTrack = activeTracks[0];
+      if (!videoTrack || videoTrack.readyState !== 'live') {
+        console.error('Video track is not live!');
+        this.isRecording = false;
+        return;
+      }
+
+        this.recordedChunks = [];
+        const options = {
+          mimeType: 'video/webm;codecs=vp9,opus', // VP9 for better quality (if supported)
+          videoBitsPerSecond: 1500000, // 1.5 Mbps for high quality recording
+        };
+
+      try {
+        // Check if MediaRecorder supports the mimeType
+        if (MediaRecorder.isTypeSupported(options.mimeType)) {
+          this.mediaRecorder = new MediaRecorder(combinedStream, options);
+          console.log('MediaRecorder created with mimeType:', options.mimeType);
+        } else {
+          console.warn('MimeType not supported, using default');
+          this.mediaRecorder = new MediaRecorder(combinedStream);
+        }
+      } catch (error) {
+        console.error('MediaRecorder creation error:', error);
+        // Fallback to default
+        this.mediaRecorder = new MediaRecorder(combinedStream);
+      }
+
+      this.mediaRecorder.ondataavailable = (event) => {
+        console.log('Data available event, size:', event.data.size, 'bytes');
+        if (event.data && event.data.size > 0) {
+          this.recordedChunks.push(event.data);
+          console.log('Chunk added, total chunks:', this.recordedChunks.length, 'Total size:', this.recordedChunks.reduce((sum, chunk) => sum + chunk.size, 0), 'bytes');
+        } else {
+          console.warn('Empty data chunk received');
+        }
+      };
+
+      this.mediaRecorder.onerror = (event) => {
+        console.error('MediaRecorder error:', event.error);
+      };
+
+      this.mediaRecorder.onstop = () => {
+        console.log('MediaRecorder stopped, chunks:', this.recordedChunks.length);
+        console.log('Chunk sizes:', this.recordedChunks.map(c => c.size));
+        
+        // Store callback reference before async operations
+        const callback = this.onRecordingComplete;
+        
+        // Stop canvas animation
+        if (this.recordingAnimationFrame) {
+          cancelAnimationFrame(this.recordingAnimationFrame);
+          this.recordingAnimationFrame = null;
+        }
+        
+        // Wait a bit to ensure all chunks are processed
+        setTimeout(() => {
+          // Cleanup video elements
+          if (this.localVideoElement) {
+            this.localVideoElement.srcObject = null;
+            this.localVideoElement = null;
+          }
+          if (this.remoteVideoElement) {
+            this.remoteVideoElement.srcObject = null;
+            this.remoteVideoElement = null;
+          }
+          
+          // Cleanup canvas
+          if (this.recordingCanvas) {
+            this.recordingCanvas = null;
+            this.recordingCanvasContext = null;
+          }
+          
+          if (this.recordedChunks.length > 0) {
+            const totalSize = this.recordedChunks.reduce((sum, chunk) => sum + chunk.size, 0);
+            if (totalSize > 0) {
+              const blob = new Blob(this.recordedChunks, { type: 'video/webm' });
+              console.log('Recording blob created, size:', blob.size, 'bytes');
+              
+              // Use stored callback reference (captured before async operations)
+              // Also check current callback in case it was set again
+              const currentCallback = this.onRecordingComplete || callback;
+              
+              if (currentCallback) {
+                console.log('Calling onRecordingComplete callback');
+                try {
+                  currentCallback(blob);
+                } catch (err) {
+                  console.error('Error in onRecordingComplete callback:', err);
+                }
+              } else {
+                console.warn('onRecordingComplete callback not set!');
+                console.warn('Recording blob available but no callback to handle it');
+              }
+            } else {
+              console.warn('All chunks are empty, recording failed');
+            }
+          } else {
+            console.warn('No recorded chunks available, recording may have failed');
+            console.warn('MediaRecorder state:', this.mediaRecorder?.state);
+          }
+          // Clear chunks after processing
+          this.recordedChunks = [];
+        }, 500);
+      };
+
+      // Start drawing loop immediately and keep it running continuously
+      // This will feed the canvas stream continuously
+      this.isRecording = true; // Set flag BEFORE starting drawing loop
+      // #region agent log
+      fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:1126',message:'Starting drawVideos loop',data:{hasLocalElement:!!this.localVideoElement,hasRemoteElement:!!this.remoteVideoElement,isRecording:this.isRecording},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
+      drawVideos(); // Start the continuous drawing loop
+      
+      // Wait a short time for first frames to be drawn, then start MediaRecorder
+      setTimeout(() => {
+        try {
+          // Start MediaRecorder with timeslice - this ensures regular data capture
+          this.mediaRecorder.start(1000); // Capture data every 1 second
+          console.log('✅ Recording started with combined stream, state:', this.mediaRecorder.state);
+          console.log('Canvas stream active tracks:', combinedStream.getTracks().length);
+          console.log('Canvas stream video tracks:', combinedStream.getVideoTracks().length);
+          console.log('Canvas stream audio tracks:', combinedStream.getAudioTracks().length);
+          console.log('Video track readyState:', videoTrack?.readyState);
+        } catch (error) {
+          console.error('Error starting MediaRecorder:', error);
+          this.isRecording = false;
+          throw error;
+        }
+      }, 500); // Wait only 500ms for first frames to be drawn
     };
 
-    // Start recording with timeslice to ensure data is captured regularly
-    try {
-      this.mediaRecorder.start(1000); // Capture data every 1 second
-      this.isRecording = true;
-      console.log('Recording started with timeslice, state:', this.mediaRecorder.state);
-    } catch (error) {
-      console.error('Error starting MediaRecorder:', error);
-      this.isRecording = false;
-      throw error;
-    }
+    // Wait for videos to be ready
+    const checkReady = () => {
+      const localReady = this.localVideoElement && this.localVideoElement.readyState >= 2;
+      const remoteReady = !this.remoteStream || (this.remoteVideoElement && this.remoteVideoElement.readyState >= 2);
+      
+      if (localReady && remoteReady) {
+        setupRecording();
+      } else {
+        setTimeout(checkReady, 100);
+      }
+    };
+
+    // Start checking after a short delay
+    setTimeout(checkReady, 500);
   }
 
   /**
@@ -838,8 +1189,48 @@ class WebRTCService {
    */
   stopRecording() {
     if (this.mediaRecorder && this.isRecording) {
-      this.mediaRecorder.stop();
-      this.isRecording = false;
+      console.log('Stopping MediaRecorder, state:', this.mediaRecorder.state);
+      
+      // Request final data chunk before stopping
+      if (this.mediaRecorder.state === 'recording') {
+        this.mediaRecorder.requestData();
+      }
+      
+      // Stop the recorder
+      try {
+        this.mediaRecorder.stop();
+        this.isRecording = false;
+        console.log('MediaRecorder stop() called');
+      } catch (error) {
+        console.error('Error stopping MediaRecorder:', error);
+        this.isRecording = false;
+      }
+      
+      // Stop canvas animation immediately
+      if (this.recordingAnimationFrame) {
+        cancelAnimationFrame(this.recordingAnimationFrame);
+        this.recordingAnimationFrame = null;
+      }
+      
+      // Clean up video elements and canvas immediately for restart
+      // This ensures clean state if recording is restarted
+      if (this.localVideoElement) {
+        this.localVideoElement.srcObject = null;
+        this.localVideoElement = null;
+      }
+      if (this.remoteVideoElement) {
+        this.remoteVideoElement.srcObject = null;
+        this.remoteVideoElement = null;
+      }
+      if (this.recordingCanvas) {
+        this.recordingCanvas = null;
+        this.recordingCanvasContext = null;
+      }
+    } else {
+      console.warn('stopRecording called but MediaRecorder not active', {
+        hasRecorder: !!this.mediaRecorder,
+        isRecording: this.isRecording
+      });
     }
   }
 
@@ -900,17 +1291,35 @@ class WebRTCService {
 
     // Stop recording BEFORE clearing callback
     // IMPORTANT: Don't clear onRecordingComplete here - let it process first
-    if (this.isRecording) {
-      console.log('Stopping recording in endCall');
-      this.stopRecording();
-      // Wait a bit for recording to process (don't clear callback immediately)
+    // Check if mediaRecorder exists and is still active (even if isRecording is false)
+    const hasActiveRecorder = this.mediaRecorder && 
+                              (this.mediaRecorder.state === 'recording' || 
+                               this.mediaRecorder.state === 'paused' ||
+                               this.recordedChunks.length > 0);
+    
+    if (this.isRecording || hasActiveRecorder) {
+      console.log('Stopping recording in endCall', {
+        isRecording: this.isRecording,
+        recorderState: this.mediaRecorder?.state,
+        chunksCount: this.recordedChunks.length
+      });
+      
+      if (this.isRecording && this.mediaRecorder) {
+        this.stopRecording();
+      }
+      
+      // Wait longer for recording to process and upload (15 seconds)
+      // The callback will be cleared after upload completes or timeout
       setTimeout(() => {
-        console.log('Recording should be processed by now');
-        // Clear callback after processing
-        this.onRecordingComplete = null;
-      }, 2000);
+        console.log('Recording processing timeout - clearing callback');
+        // Only clear if still exists (might have been cleared by upload success)
+        if (this.onRecordingComplete) {
+          this.onRecordingComplete = null;
+        }
+      }, 15000); // 15 seconds timeout
     } else {
-      // If not recording, clear callback immediately
+      // If not recording and no active recorder, clear callback immediately
+      console.log('No active recording, clearing callback immediately');
       this.onRecordingComplete = null;
     }
 
@@ -934,6 +1343,120 @@ class WebRTCService {
     this.localStream = null;
     this.remoteStream = null;
     this.roomId = null;
+    
+    // Stop screen recording if active
+    if (this.isScreenRecording) {
+      this.stopScreenRecording();
+    }
+  }
+
+  /**
+   * Start screen recording (agent's screen)
+   */
+  async startScreenRecording() {
+    if (this.isScreenRecording) {
+      console.warn('Screen recording already in progress');
+      return;
+    }
+
+    try {
+      console.log('🖥️ Starting screen recording...');
+      
+      // Request screen capture
+      this.screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          width: { ideal: 1920, min: 1280 },
+          height: { ideal: 1080, min: 720 },
+          frameRate: { ideal: 30, max: 30 }
+        },
+        audio: true // Capture system audio if available
+      });
+
+      // Handle user stopping screen share
+      this.screenStream.getVideoTracks()[0].addEventListener('ended', () => {
+        console.log('🖥️ Screen share ended by user');
+        this.stopScreenRecording();
+      });
+
+      // Setup MediaRecorder for screen
+      this.screenRecordedChunks = [];
+      const options = {
+        mimeType: 'video/webm;codecs=vp9,opus',
+        videoBitsPerSecond: 2500000 // 2.5 Mbps
+      };
+
+      // Fallback to VP8 if VP9 not supported
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options.mimeType = 'video/webm;codecs=vp8,opus';
+      }
+
+      this.screenRecorder = new MediaRecorder(this.screenStream, options);
+
+      this.screenRecorder.ondataavailable = (event) => {
+        console.log('📹 Screen recording data available, size:', event.data.size, 'bytes');
+        if (event.data && event.data.size > 0) {
+          this.screenRecordedChunks.push(event.data);
+        }
+      };
+
+      this.screenRecorder.onstop = () => {
+        console.log('🖥️ Screen recording stopped, chunks:', this.screenRecordedChunks.length);
+        
+        if (this.screenRecordedChunks.length > 0) {
+          const totalSize = this.screenRecordedChunks.reduce((sum, chunk) => sum + chunk.size, 0);
+          if (totalSize > 0) {
+            const blob = new Blob(this.screenRecordedChunks, { type: 'video/webm' });
+            console.log('📹 Screen recording blob created, size:', blob.size, 'bytes');
+            
+            if (this.onScreenRecordingComplete) {
+              this.onScreenRecordingComplete(blob);
+            }
+          } else {
+            console.warn('⚠️ Screen recording chunks are empty');
+          }
+        } else {
+          console.warn('⚠️ No screen recording chunks available');
+        }
+        
+        // Cleanup
+        this.screenRecordedChunks = [];
+        if (this.screenStream) {
+          this.screenStream.getTracks().forEach(track => track.stop());
+          this.screenStream = null;
+        }
+      };
+
+      this.screenRecorder.onerror = (event) => {
+        console.error('❌ Screen recording error:', event.error);
+      };
+
+      // Start recording with 1 second timeslice
+      this.screenRecorder.start(1000);
+      this.isScreenRecording = true;
+      console.log('✅ Screen recording started');
+      
+    } catch (error) {
+      console.error('❌ Failed to start screen recording:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Stop screen recording
+   */
+  stopScreenRecording() {
+    if (this.screenRecorder && this.isScreenRecording) {
+      console.log('🖥️ Stopping screen recording...');
+      
+      if (this.screenRecorder.state === 'recording') {
+        this.screenRecorder.requestData();
+        this.screenRecorder.stop();
+      }
+      
+      this.isScreenRecording = false;
+    } else {
+      console.warn('⚠️ Screen recording not active');
+    }
   }
 }
 

@@ -35,6 +35,7 @@ const VideoCall = ({
   onDocumentCapture, 
   onEndCall, 
   showDocumentCapture = true,
+  showFaceMatch = true,
   localUserName = 'You',
   remoteUserName = 'Remote User',
   sessionId = null
@@ -525,8 +526,8 @@ const VideoCall = ({
           </Button>
         )}
 
-        {/* Face Matching Button */}
-        {sessionId && (
+        {/* Face Matching Button - Only show for investigators */}
+        {sessionId && showFaceMatch && (
           <Button
             variant="contained"
             startIcon={isMatchingFace ? <CircularProgress size={16} color="inherit" /> : <Face />}

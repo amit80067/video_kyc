@@ -28,8 +28,14 @@ router.put('/documents/:documentId/verify', authenticate, requireRole('agent', '
 // Upload video recording
 router.post('/recordings/upload', authenticate, upload.single('video'), kycController.uploadRecording);
 
+// Upload screen recording
+router.post('/recordings/upload-screen', authenticate, upload.single('video'), kycController.uploadScreenRecording);
+
 // Get video recordings by session
 router.get('/recordings', authenticate, kycController.getRecordingsBySession);
+
+// Generate PDF for session
+router.post('/sessions/:sessionId/generate-pdf', authenticate, requireRole('agent', 'admin'), kycController.generatePDF);
 
 // Real-time face matching (unauthenticated - for users during call)
 router.post('/realtime-face-match', upload.single('liveImage'), kycController.realtimeFaceMatch);

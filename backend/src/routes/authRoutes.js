@@ -9,7 +9,7 @@ router.post('/login', authController.login);
 // Get current user
 router.get('/me', authController.authenticate, authController.getMe);
 
-// Agent management (admin only)
+// Investigator management (admin only)
 router.post('/agents', authController.authenticate, requireRole('admin'), authController.createAgent);
 router.get('/agents', authController.authenticate, requireRole('admin'), authController.listAgents);
 

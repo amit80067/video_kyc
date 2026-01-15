@@ -9,12 +9,32 @@ const fs = require('fs');
 const https = require('https');
 const http = require('http');
 
+// Helper function to format date in IST timezone
+function formatDateIST(dateString) {
+    if (!dateString) return 'N/A';
+    const date = new Date(dateString);
+    
+    // Format: MM/DD/YYYY, HH:MM:SS AM/PM in IST timezone
+    const options = {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+    };
+    
+    return date.toLocaleString('en-US', options);
+}
+
 class ExportController {
     async generatePDF(req, res) {
         try {
             const { sessionId } = req.params;
 
-            // Get session data
+            // Get session data with latest status
             const sessionResult = await pool.query(
                 `SELECT s.*, u.username as agent_username, u.full_name as agent_name
                 FROM kyc_sessions s
@@ -28,6 +48,9 @@ class ExportController {
             }
 
             const session = sessionResult.rows[0];
+            
+            // Log status for debugging
+            console.log(`[PDF Generation] Session ${sessionId} - Current Status: ${session.status}`);
 
             // Get documents with OCR data
             const documentsResult = await pool.query(
@@ -115,6 +138,8 @@ class ExportController {
                 WHERE s.session_id = $1`,
                 [sessionId]
             );
+            
+            console.log(`PDF Generation: Found ${recordingsResult.rows.length} recording(s) for session ${sessionId}`);
 
             // Create PDF
             const doc = new PDFDocument({ margin: 50 });
@@ -136,7 +161,7 @@ class ExportController {
             // Header
             doc.fontSize(24).font('Helvetica-Bold').text('Video KYC Verification Report', { align: 'center' });
             doc.moveDown(0.5);
-            doc.fontSize(10).font('Helvetica').fillColor('gray').text(`Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
+            doc.fontSize(10).font('Helvetica').fillColor('gray').text(`Generated on: ${formatDateIST(new Date().toISOString())}`, { align: 'center' });
             doc.fillColor('black');
             doc.moveDown();
 
@@ -152,11 +177,20 @@ class ExportController {
                 { label: 'User Email', value: session.user_email || 'N/A' },
                 { label: 'Agent', value: session.agent_name || session.agent_username || 'N/A' },
                 { label: 'Status', value: session.status.toUpperCase() },
-                { label: 'Created At', value: new Date(session.created_at).toLocaleString() }
+                { label: 'Created At', value: formatDateIST(session.created_at) }
             ];
             
-            if (session.completed_at) {
-                sessionInfo.push({ label: 'Completed At', value: new Date(session.completed_at).toLocaleString() });
+            // Add IP and Location if available
+            if (session.user_ip) {
+                sessionInfo.push({ label: 'User IP Address', value: session.user_ip });
+            }
+            if (session.user_location) {
+                sessionInfo.push({ label: 'User Location', value: session.user_location });
+            }
+            
+            // Show started_at as "Completed At" (when call started) in IST
+            if (session.started_at) {
+                sessionInfo.push({ label: 'Completed At', value: formatDateIST(session.started_at) });
             }
             
             sessionInfo.forEach(info => {
@@ -167,10 +201,11 @@ class ExportController {
             doc.moveDown();
 
             // Documents
+            doc.fontSize(16).font('Helvetica-Bold').fillColor('#1976d2').text('Documents', { underline: true });
+            doc.fillColor('black').font('Helvetica').fontSize(11);
+            doc.moveDown(0.3);
+            
             if (documentsResult.rows.length > 0) {
-                doc.fontSize(16).font('Helvetica-Bold').fillColor('#1976d2').text('Documents', { underline: true });
-                doc.fillColor('black').font('Helvetica').fontSize(11);
-                doc.moveDown(0.3);
                 documentsResult.rows.forEach((document, index) => {
                     doc.moveDown(0.5);
                     doc.font('Helvetica-Bold').fontSize(12).fillColor('#424242').text(`Document ${index + 1}: ${document.document_type.toUpperCase()}`, { underline: false });
@@ -251,6 +286,17 @@ class ExportController {
                     doc.font('Helvetica-Bold').text('OCR Confidence:', { continued: true });
                     doc.font('Helvetica').text(` ${document.ocr_confidence ? document.ocr_confidence + '%' : 'N/A'}`);
                     
+                    // Add remark if available
+                    if (document.remark && document.remark.trim()) {
+                        doc.moveDown(0.3);
+                        doc.font('Helvetica-Bold').fontSize(11).fillColor('#424242').text('Remark:');
+                        doc.fillColor('black').font('Helvetica').fontSize(10);
+                        doc.text(document.remark, {
+                            align: 'left',
+                            indent: 10
+                        });
+                    }
+                    
                     // Add document image URL as clickable link
                     doc.moveDown(0.3);
                     if (document.s3_key) {
@@ -274,13 +320,18 @@ class ExportController {
                     doc.fillColor('black').fontSize(10);
                 });
                 doc.moveDown();
+            } else {
+                doc.moveDown(0.3);
+                doc.font('Helvetica').text('No documents available for this session.');
+                doc.moveDown();
             }
 
             // Face Verification
+            doc.fontSize(16).font('Helvetica-Bold').fillColor('#1976d2').text('Face Verification', { underline: true });
+            doc.fillColor('black').font('Helvetica').fontSize(11);
+            doc.moveDown(0.3);
+            
             if (faceVerificationResult.rows.length > 0) {
-                doc.fontSize(16).font('Helvetica-Bold').fillColor('#1976d2').text('Face Verification', { underline: true });
-                doc.fillColor('black').font('Helvetica').fontSize(11);
-                doc.moveDown(0.3);
                 const fv = faceVerificationResult.rows[0];
                 doc.font('Helvetica-Bold').text('Match Score:', { continued: true });
                 doc.font('Helvetica').text(` ${fv.match_score || 'N/A'}`);
@@ -291,12 +342,16 @@ class ExportController {
                 doc.font('Helvetica-Bold').text('Verification Result:', { continued: true });
                 doc.font('Helvetica').text(` ${fv.verification_result || 'N/A'}`);
                 doc.moveDown();
+            } else {
+                doc.font('Helvetica').text('No face verification data available for this session.');
+                doc.moveDown();
             }
 
             // Video Recordings
             doc.fontSize(16).font('Helvetica-Bold').fillColor('#1976d2').text('Video Recordings', { underline: true });
             doc.fillColor('black').font('Helvetica').fontSize(11);
             doc.moveDown(0.3);
+            console.log(`PDF Generation: Adding ${recordingsResult.rows.length} recording(s) to PDF`);
             if (recordingsResult.rows.length > 0) {
                 recordingsResult.rows.forEach((rec, index) => {
                     doc.moveDown(0.5);
@@ -311,7 +366,7 @@ class ExportController {
                     doc.font('Helvetica').text(` ${rec.file_size_bytes ? (rec.file_size_bytes / 1024 / 1024).toFixed(2) + ' MB' : 'N/A'}`);
                     
                     doc.font('Helvetica-Bold').text('Recorded At:', { continued: true });
-                    doc.font('Helvetica').text(` ${rec.recording_started_at ? new Date(rec.recording_started_at).toLocaleString() : 'N/A'}`);
+                    doc.font('Helvetica').text(` ${rec.recording_started_at ? formatDateIST(rec.recording_started_at) : 'N/A'}`);
                     
                     // Add video URL as clickable link
                     doc.moveDown(0.3);
@@ -409,6 +464,9 @@ class ExportController {
             const params = [];
             let paramIndex = 1;
 
+            // Filter: Only show sessions from last 90 days
+            query += ` AND s.created_at >= NOW() - INTERVAL '90 days'`;
+
             if (startDate) {
                 query += ` AND s.created_at >= $${paramIndex}`;
                 params.push(startDate);
@@ -468,8 +526,8 @@ class ExportController {
                     status: session.status,
                     document_count: session.document_count || 0,
                     recording_count: session.recording_count || 0,
-                    created_at: new Date(session.created_at).toLocaleString(),
-                    completed_at: session.completed_at ? new Date(session.completed_at).toLocaleString() : ''
+                    created_at: formatDateIST(session.created_at),
+                    completed_at: session.started_at ? formatDateIST(session.started_at) : ''
                 });
             });
 

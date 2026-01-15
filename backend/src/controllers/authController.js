@@ -118,7 +118,7 @@ class AuthController {
             const newAgent = result.rows[0];
 
             res.status(201).json({
-                message: 'Agent created successfully',
+                message: 'Investigator created successfully',
                 agent: {
                     id: newAgent.id,
                     username: newAgent.username,

@@ -240,7 +240,17 @@ const UserJoinPage = () => {
         console.log('Connection state:', state);
         // Agar connection disconnect ho gaya to status update
         if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-          handleEndCall();
+          // Stop recording before ending call
+          if (webrtcService.isRecording) {
+            console.log('Stopping recording due to disconnect');
+            webrtcService.stopRecording();
+            // Wait for recording to process (5 seconds)
+            setTimeout(() => {
+              handleEndCall();
+            }, 5000);
+          } else {
+            handleEndCall();
+          }
         }
       };
       
@@ -254,9 +264,19 @@ const UserJoinPage = () => {
         
         webrtcService.socket.on('user-left', (data) => {
           console.log('User left:', data);
-          // Agent disconnect ho gaya
-          alert('Agent has left the call');
-          handleEndCall();
+          // Investigator disconnect ho gaya
+          alert('Investigator has left the call');
+          // Stop recording before ending call
+          if (webrtcService.isRecording) {
+            console.log('Stopping recording due to user-left');
+            webrtcService.stopRecording();
+            // Wait for recording to process (5 seconds)
+            setTimeout(() => {
+              handleEndCall();
+            }, 5000);
+          } else {
+            handleEndCall();
+          }
         });
         
         // Handle session expired event from server
@@ -269,17 +289,17 @@ const UserJoinPage = () => {
           webrtcService.endCall();
         });
         
-        // Handle existing users - if agent already joined, wait for offer or create one
+        // Handle existing users - if investigator already joined, wait for offer or create one
         webrtcService.socket.on('existing-users', (users) => {
           console.log('👥 UserJoinPage: Existing users in room:', users);
           if (users.length > 0) {
-            // Agent already in room, setup connection and create offer
+            // Investigator already in room, setup connection and create offer
             if (!webrtcService.peerConnection && stream) {
-              console.log('🔧 UserJoinPage: Setting up peer connection for existing agent...');
+              console.log('🔧 UserJoinPage: Setting up peer connection for existing investigator...');
               webrtcService.setupPeerConnection().then(() => {
                 setTimeout(() => {
                   if (webrtcService.peerConnection && stream) {
-                    console.log('📤 UserJoinPage: Creating offer for existing agent...');
+                    console.log('📤 UserJoinPage: Creating offer for existing investigator...');
                     webrtcService.createOffer();
                   }
                 }, 1500);
@@ -288,17 +308,17 @@ const UserJoinPage = () => {
           }
         });
         
-        // Handle agent joined - if agent joins after user, create offer
+        // Handle investigator joined - if investigator joins after user, create offer
         webrtcService.socket.on('user-joined', (data) => {
           console.log('👤 UserJoinPage: Someone joined room:', data);
-          if (data.userType === 'agent') {
-            // Agent joined after user, setup connection and create offer
+          if (data.userType === 'investigator') {
+            // Investigator joined after user, setup connection and create offer
             if (!webrtcService.peerConnection && stream) {
-              console.log('🔧 UserJoinPage: Setting up peer connection for new agent...');
+              console.log('🔧 UserJoinPage: Setting up peer connection for new investigator...');
               webrtcService.setupPeerConnection().then(() => {
                 setTimeout(() => {
                   if (webrtcService.peerConnection && stream) {
-                    console.log('📤 UserJoinPage: Creating offer for new agent...');
+                    console.log('📤 UserJoinPage: Creating offer for new investigator...');
                     webrtcService.createOffer();
                   }
                 }, 1500);
@@ -316,29 +336,49 @@ const UserJoinPage = () => {
       // This prevents race conditions
 
       // Start recording
+      // Store sessionId in a ref to ensure it's available when callback executes
+      const currentSessionId = sessionId;
+      if (!currentSessionId) {
+        console.error('❌ Cannot start recording: sessionId is missing');
+        throw new Error('Session ID is required');
+      }
+      
+      console.log('🎥 Starting recording with sessionId:', currentSessionId);
       webrtcService.startRecording();
       webrtcService.onRecordingComplete = async (blob) => {
         // Upload recording when call ends
-        console.log('Recording complete callback triggered, blob size:', blob.size);
+        console.log('🎥 Recording complete callback triggered, blob size:', blob.size, 'bytes');
         if (!blob || blob.size === 0) {
-          console.error('Recording blob is empty, cannot upload');
+          console.error('❌ Recording blob is empty, cannot upload');
           return;
         }
+        
+        // Use the captured sessionId (from closure)
+        const uploadSessionId = currentSessionId || sessionId;
+        if (!uploadSessionId) {
+          console.error('❌ Session ID is null/undefined when trying to upload recording');
+          console.error('Current sessionId from params:', sessionId);
+          console.error('Captured sessionId:', currentSessionId);
+          return;
+        }
+        
         try {
           const formData = new FormData();
           formData.append('video', blob, 'recording.webm');
-          formData.append('sessionId', sessionId);
-          console.log('Uploading recording for session:', sessionId);
+          formData.append('sessionId', uploadSessionId);
+          console.log('📤 Uploading recording for session:', uploadSessionId, 'Size:', blob.size, 'bytes');
           const response = await api.post('/kyc/recordings/upload', formData, {
             headers: { 'Content-Type': 'multipart/form-data' },
+            timeout: 120000, // 2 minutes timeout for large files
           });
-          console.log('Recording uploaded successfully:', response.data);
+          console.log('✅ Recording uploaded successfully:', response.data);
         } catch (err) {
-          console.error('Failed to upload recording:', err);
+          console.error('❌ Failed to upload recording:', err);
           console.error('Error details:', err.response?.data || err.message);
+          console.error('SessionId used:', uploadSessionId);
           // Don't block session expiration if upload fails
           if (err.response?.status === 413) {
-            console.warn('Video file too large, but continuing...');
+            console.warn('⚠️ Video file too large, but continuing...');
           }
         }
       };
@@ -890,6 +930,7 @@ const UserJoinPage = () => {
           remoteStream={remoteStream}
           onEndCall={handleEndCall}
           showDocumentCapture={false}
+          showFaceMatch={false}
           localUserName={userName}
           remoteUserName={agentName}
           sessionId={sessionId}

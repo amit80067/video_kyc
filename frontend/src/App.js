@@ -4,8 +4,8 @@ import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 
 import UserJoinPage from './pages/UserJoinPage';
-import AgentLogin from './pages/AgentLogin';
-import AgentDashboard from './components/Dashboard/AgentDashboard';
+import InvestigatorLogin from './pages/InvestigatorLogin';
+import InvestigatorDashboard from './components/Dashboard/InvestigatorDashboard';
 import AdminPanel from './pages/AdminPanel';
 
 const theme = createTheme({
@@ -25,10 +25,10 @@ function App() {
       <CssBaseline />
       <Router>
         <Routes>
-          <Route path="/" element={<Navigate to="/agent/login" replace />} />
+          <Route path="/" element={<Navigate to="/investigator/login" replace />} />
           <Route path="/join/:sessionId" element={<UserJoinPage />} />
-          <Route path="/agent/login" element={<AgentLogin />} />
-          <Route path="/agent/dashboard" element={<AgentDashboard />} />
+          <Route path="/investigator/login" element={<InvestigatorLogin />} />
+          <Route path="/investigator/dashboard" element={<InvestigatorDashboard />} />
           <Route path="/admin" element={<AdminPanel />} />
         </Routes>
       </Router>

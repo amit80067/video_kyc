@@ -11,7 +11,7 @@ import {
 } from '@mui/material';
 import api from '../services/api';
 
-const AgentLogin = () => {
+const InvestigatorLogin = () => {
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -36,7 +36,7 @@ const AgentLogin = () => {
       if (response.data.user.role === 'admin') {
         navigate('/admin');
       } else {
-        navigate('/agent/dashboard');
+        navigate('/investigator/dashboard');
       }
     } catch (err) {
       setError(err.response?.data?.error || 'Login failed');
@@ -103,5 +103,5 @@ const AgentLogin = () => {
   );
 };
 
-export default AgentLogin;
+export default InvestigatorLogin;
 

@@ -33,6 +33,8 @@ import {
   Add,
   PersonAdd,
   People,
+  Upload,
+  PlayArrow,
 } from '@mui/icons-material';
 import api from '../services/api';
 
@@ -50,13 +52,14 @@ const AdminPanel = () => {
     userName: '',
     userPhone: '',
     userEmail: '',
+    agentId: '', // Selected investigator ID
   });
   const [countryCode, setCountryCode] = useState('+91');
   const [validationErrors, setValidationErrors] = useState({
     userPhone: '',
     userEmail: '',
   });
-  // Agent management state
+  // Investigator management state
   const [agents, setAgents] = useState([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
   const [openAgentDialog, setOpenAgentDialog] = useState(false);
@@ -71,6 +74,13 @@ const AdminPanel = () => {
   });
   const [agentSuccess, setAgentSuccess] = useState('');
   const [activeTab, setActiveTab] = useState(0);
+  // Bulk upload state
+  const [bulkPendingSessions, setBulkPendingSessions] = useState([]);
+  const [showUploadDialog, setShowUploadDialog] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadFile, setUploadFile] = useState(null);
+  const [uploadResult, setUploadResult] = useState(null);
+  const [showResultDialog, setShowResultDialog] = useState(false);
 
   // Common country codes
   const countryCodes = [
@@ -97,20 +107,27 @@ const AdminPanel = () => {
     const userStr = localStorage.getItem('user');
     
     if (!token || !userStr) {
-      navigate('/agent/login');
+      navigate('/investigator/login');
       return;
     }
     
     try {
       const user = JSON.parse(userStr);
       if (user.role !== 'admin') {
-        // Not an admin, redirect to agent dashboard or login
-        navigate('/agent/dashboard');
+        // Not an admin, redirect to investigator dashboard or login
+        navigate('/investigator/dashboard');
         return;
+      }
+      
+      // Load initial data based on active tab
+      console.log('🚀 [INIT] Component mounted, activeTab:', activeTab);
+      if (activeTab === 2) {
+        console.log('🚀 [INIT] Loading bulk pending on mount...');
+        loadBulkPendingSessions();
       }
     } catch (err) {
       console.error('Error parsing user data:', err);
-      navigate('/agent/login');
+      navigate('/investigator/login');
       return;
     }
   }, [navigate]);
@@ -124,16 +141,32 @@ const AdminPanel = () => {
       try {
         const user = JSON.parse(userStr);
         if (user.role === 'admin') {
-          loadSessions();
-          if (activeTab === 1) {
+          console.log('🔄 [useEffect] Active tab:', activeTab);
+          if (activeTab === 0) {
+            console.log('📋 Loading sessions...');
+            loadSessions();
+          } else if (activeTab === 1) {
+            console.log('👥 Loading agents...');
             loadAgents();
+          } else if (activeTab === 2) {
+            console.log('📦 [BULK PENDING TAB] Active - Loading bulk pending sessions...');
+            loadBulkPendingSessions();
           }
         }
       } catch (err) {
         console.error('Error parsing user data:', err);
       }
+    } else {
+      console.warn('⚠️ No token or user found');
     }
   }, [filters, activeTab]);
+
+  // Load agents when create session dialog opens
+  useEffect(() => {
+    if (openDialog) {
+      loadAgents();
+    }
+  }, [openDialog]);
 
   const loadSessions = async () => {
     try {
@@ -143,7 +176,11 @@ const AdminPanel = () => {
       if (filters.endDate) params.append('endDate', filters.endDate);
 
       const response = await api.get(`/sessions?${params.toString()}`);
-      setSessions(response.data.sessions);
+      // Filter out pending_bulk sessions from main sessions tab (they show in BULK PENDING tab)
+      const filteredSessions = (response.data.sessions || []).filter(
+        session => session.status !== 'pending_bulk'
+      );
+      setSessions(filteredSessions);
       setLoading(false);
     } catch (err) {
       console.error('Failed to load sessions:', err);
@@ -153,19 +190,33 @@ const AdminPanel = () => {
 
   const handleExportPDF = async (sessionId) => {
     try {
+      // Show loading message
+      const loadingMessage = `Generating PDF for session ${sessionId}...`;
+      console.log(loadingMessage);
+      
       const response = await api.get(`/export/pdf/${sessionId}`, {
         responseType: 'blob',
       });
 
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `kyc-report-${sessionId}.pdf`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      // Check if response is actually a PDF
+      if (response.data && response.data.size > 0) {
+        const url = window.URL.createObjectURL(new Blob([response.data]));
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', `kyc-report-${sessionId}.pdf`);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        // Clean up the URL after a delay
+        setTimeout(() => window.URL.revokeObjectURL(url), 100);
+        alert('PDF downloaded successfully!');
+      } else {
+        throw new Error('PDF file is empty');
+      }
     } catch (err) {
       console.error('Failed to export PDF:', err);
+      const errorMessage = err.response?.data?.error || err.message || 'Failed to export PDF';
+      alert(`Error: ${errorMessage}\n\nPlease check:\n1. Session exists in database\n2. Backend is running\n3. Check browser console for details`);
     }
   };
 
@@ -195,7 +246,90 @@ const AdminPanel = () => {
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    navigate('/agent/login');
+    navigate('/investigator/login');
+  };
+
+  // Bulk upload functions
+  const loadBulkPendingSessions = async () => {
+    try {
+      console.log('📥 [BULK PENDING] Fetching bulk pending sessions from /sessions/bulk-pending...');
+      const response = await api.get('/sessions/bulk-pending');
+      console.log('✅ [BULK PENDING] Full response object:', response);
+      console.log('✅ [BULK PENDING] Response data:', response.data);
+      console.log('✅ [BULK PENDING] Sessions array:', response.data?.sessions);
+      console.log('📊 [BULK PENDING] Sessions count:', response.data?.sessions?.length || 0);
+      console.log('📊 [BULK PENDING] Response success:', response.data?.success);
+      
+      const sessions = response.data?.sessions || response.data || [];
+      console.log('📋 [BULK PENDING] Setting sessions state with', sessions.length, 'records');
+      console.log('📋 [BULK PENDING] First record:', sessions[0]);
+      setBulkPendingSessions(sessions);
+      
+      if (sessions.length === 0) {
+        console.warn('⚠️ [BULK PENDING] No bulk pending sessions found in response');
+      } else {
+        console.log('✅ [BULK PENDING] Successfully loaded', sessions.length, 'records');
+      }
+    } catch (err) {
+      console.error('❌ [BULK PENDING] Failed to load bulk pending sessions:', err);
+      console.error('❌ [BULK PENDING] Error response:', err.response);
+      console.error('❌ [BULK PENDING] Error data:', err.response?.data);
+      console.error('❌ [BULK PENDING] Error message:', err.message);
+      console.error('❌ [BULK PENDING] Error stack:', err.stack);
+      setBulkPendingSessions([]);
+    }
+  };
+
+  const handleBulkUpload = async () => {
+    if (!uploadFile) {
+      alert('Please select a CSV or Excel file');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', uploadFile);
+
+      const response = await api.post('/sessions/bulk-upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      // Store result and show in dialog
+      setUploadResult({
+        created: response.data.created,
+        errors: response.data.errors,
+        errorDetails: response.data.errorDetails || [],
+        message: response.data.message || `✅ Successfully stored ${response.data.created} record(s) in Bulk Pending!`
+      });
+      setShowUploadDialog(false);
+      setUploadFile(null);
+      setShowResultDialog(true);
+      loadBulkPendingSessions();
+    } catch (err) {
+      console.error('Bulk upload error:', err);
+      alert('Failed to upload file: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleStartSession = async (session) => {
+    try {
+      // Use id instead of session_id since bulk_upload_data doesn't have session_id
+      const recordId = session.id || session.session_id;
+      const response = await api.post(`/sessions/${recordId}/start-from-pending`);
+      
+      if (response.data.success) {
+        const smsStatus = response.data.smsSent ? '✅ SMS sent successfully' : '⚠️ SMS failed';
+        alert(`✅ Session created successfully!\n\n${smsStatus}\nUser: ${session.user_name}\nPhone: ${session.user_phone}\n\nSession will now appear in SESSIONS tab.`);
+        loadBulkPendingSessions(); // Refresh bulk pending tab (session will be removed)
+        loadSessions(); // Refresh sessions tab (session will appear here)
+      }
+    } catch (err) {
+      console.error('Start session error:', err);
+      alert('Failed to create session: ' + (err.response?.data?.error || err.message));
+    }
   };
 
   // Validate mobile number based on country code
@@ -283,14 +417,17 @@ const AdminPanel = () => {
       // Combine country code with phone number
       const fullPhoneNumber = countryCode + newSession.userPhone.replace(/^0+/, '');
       const sessionData = {
-        ...newSession,
+        userName: newSession.userName,
         userPhone: fullPhoneNumber,
+        userEmail: newSession.userEmail || undefined,
+        // Send agentId only if selected (empty string means unassigned)
+        agentId: newSession.agentId || null,
       };
       
       const response = await api.post('/sessions', sessionData);
       alert(`Session created! Link: ${response.data.session.join_link}`);
       setOpenDialog(false);
-      setNewSession({ userName: '', userPhone: '', userEmail: '' });
+      setNewSession({ userName: '', userPhone: '', userEmail: '', agentId: '' });
       setCountryCode('+91');
       setValidationErrors({ userPhone: '', userEmail: '' });
       loadSessions();
@@ -337,8 +474,13 @@ const AdminPanel = () => {
         status: 'completed',
         notes: 'Approved by admin',
       });
-      alert('Session approved!');
-      setOpenDetailsDialog(false);
+      
+      // Reload session details to get updated documents status
+      if (selectedSession) {
+        await handleViewSession(selectedSession);
+      }
+      
+      alert('Session approved! All documents marked as verified.');
       loadSessions();
     } catch (err) {
       alert('Failed to approve: ' + (err.response?.data?.error || err.message));
@@ -361,10 +503,16 @@ const AdminPanel = () => {
         status: 'rejected',
         notes: `Rejected by admin. Reason: ${rejectReason.trim()}`,
       });
-      alert('Session rejected!');
+      
       setOpenRejectDialog(false);
       setRejectReason('');
-      setOpenDetailsDialog(false);
+      
+      // Reload session details to get updated documents status
+      if (selectedSession) {
+        await handleViewSession(selectedSession);
+      }
+      
+      alert('Session rejected! All documents marked as rejected.');
       loadSessions();
     } catch (err) {
       alert('Failed to reject: ' + (err.response?.data?.error || err.message));
@@ -383,7 +531,7 @@ const AdminPanel = () => {
     return colors[status] || 'default';
   };
 
-  // Agent management functions
+  // Investigator management functions
   const loadAgents = async () => {
     try {
       setAgentsLoading(true);
@@ -445,7 +593,7 @@ const AdminPanel = () => {
         fullName: newAgent.fullName.trim() || null,
       });
       
-      setAgentSuccess(`Agent successfully created! Username: ${response.data.agent.username}`);
+      setAgentSuccess(`Investigator successfully created! Username: ${response.data.agent.username}`);
       setOpenAgentDialog(false);
       setNewAgent({ username: '', password: '', fullName: '' });
       setAgentErrors({ username: '', password: '' });
@@ -454,7 +602,7 @@ const AdminPanel = () => {
       // Clear success message after 5 seconds
       setTimeout(() => setAgentSuccess(''), 5000);
     } catch (err) {
-      const errorMsg = err.response?.data?.error || 'Failed to create agent';
+      const errorMsg = err.response?.data?.error || 'Failed to create investigator';
       setAgentErrors({
         username: errorMsg.includes('username') ? errorMsg : '',
         password: errorMsg.includes('password') ? errorMsg : '',
@@ -501,9 +649,44 @@ const AdminPanel = () => {
                   onClick={() => setOpenAgentDialog(true)}
                   sx={{ mr: 1 }}
                 >
-                  Add Agent
+                  Add Investigator
                 </Button>
                 <IconButton onClick={loadAgents} color="primary">
+                  <Refresh />
+                </IconButton>
+              </>
+            )}
+            {activeTab === 2 && (
+              <>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  startIcon={<Upload />}
+                  onClick={() => setShowUploadDialog(true)}
+                  sx={{ mr: 1 }}
+                >
+                  Upload CSV/Excel
+                </Button>
+                <Button
+                  variant="outlined"
+                  color="primary"
+                  startIcon={<Refresh />}
+                  onClick={() => {
+                    console.log('🔄 [MANUAL REFRESH] Refresh button clicked');
+                    loadBulkPendingSessions();
+                  }}
+                  sx={{ mr: 1 }}
+                >
+                  Refresh Data
+                </Button>
+                <IconButton 
+                  onClick={() => {
+                    console.log('🔄 [ICON REFRESH] Icon button clicked');
+                    loadBulkPendingSessions();
+                  }} 
+                  color="primary"
+                  title="Refresh Bulk Pending"
+                >
                   <Refresh />
                 </IconButton>
               </>
@@ -523,7 +706,8 @@ const AdminPanel = () => {
         <Paper elevation={2} sx={{ mb: 2 }}>
           <Tabs value={activeTab} onChange={(e, newValue) => setActiveTab(newValue)}>
             <Tab icon={<TableChart />} label="Sessions" />
-            <Tab icon={<People />} label="Agents" />
+            <Tab icon={<People />} label="Investigators" />
+            <Tab icon={<Upload />} label="Bulk Pending" />
           </Tabs>
         </Paper>
 
@@ -579,7 +763,7 @@ const AdminPanel = () => {
                     <TableCell>Session ID</TableCell>
                     <TableCell>User Name</TableCell>
                     <TableCell>User Phone</TableCell>
-                    <TableCell>Agent</TableCell>
+                    <TableCell>Investigator</TableCell>
                     <TableCell>Status</TableCell>
                     <TableCell>Created At</TableCell>
                     <TableCell>Actions</TableCell>
@@ -618,22 +802,13 @@ const AdminPanel = () => {
                           >
                             View
                           </Button>
-                          {session.recording_count > 0 ? (
-                            <IconButton
-                              color="primary"
-                              onClick={() => handleExportPDF(session.session_id)}
-                              title="Export PDF"
-                            >
-                              <PictureAsPdf />
-                            </IconButton>
-                          ) : (
-                            <IconButton
-                              disabled
-                              title="PDF available after video recording upload"
-                            >
-                              <PictureAsPdf style={{ opacity: 0.3 }} />
-                            </IconButton>
-                          )}
+                          <IconButton
+                            color="primary"
+                            onClick={() => handleExportPDF(session.session_id)}
+                            title="Export PDF"
+                          >
+                            <PictureAsPdf />
+                          </IconButton>
                         </TableCell>
                       </TableRow>
                     ))
@@ -644,7 +819,7 @@ const AdminPanel = () => {
           </>
         )}
 
-        {/* Agents Tab */}
+        {/* Investigators Tab */}
         {activeTab === 1 && (
           <TableContainer component={Paper}>
             <Table>
@@ -661,13 +836,13 @@ const AdminPanel = () => {
                 {agentsLoading ? (
                   <TableRow>
                     <TableCell colSpan={5} align="center">
-                      Loading agents...
+                      Loading investigators...
                     </TableCell>
                   </TableRow>
                 ) : agents.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={5} align="center">
-                      No agents found. Click "Add Agent" to create one.
+                      No investigators found. Click "Add Investigator" to create one.
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -694,8 +869,176 @@ const AdminPanel = () => {
           </TableContainer>
         )}
 
+        {/* Bulk Pending Tab */}
+        {activeTab === 2 && (
+          <TableContainer component={Paper}>
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableCell>Record ID</TableCell>
+                  <TableCell>User Name</TableCell>
+                  <TableCell>User Phone</TableCell>
+                  <TableCell>Investigator</TableCell>
+                  <TableCell>Created At</TableCell>
+                  <TableCell>Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {bulkPendingSessions.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} align="center">
+                      No bulk pending sessions. Upload a CSV/Excel file to create sessions.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  bulkPendingSessions.map((record) => (
+                    <TableRow key={record.id}>
+                      <TableCell>#{record.id}</TableCell>
+                      <TableCell>{record.user_name || 'N/A'}</TableCell>
+                      <TableCell>{record.user_phone || 'N/A'}</TableCell>
+                      <TableCell>{record.agent_name || record.agent_username || record.investigator_name || 'N/A'}</TableCell>
+                      <TableCell>
+                        {new Date(record.created_at).toLocaleString()}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="contained"
+                          size="small"
+                          color="primary"
+                          startIcon={<PlayArrow />}
+                          onClick={() => handleStartSession(record)}
+                        >
+                          CREATE SESSION
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+
+        {/* Upload Dialog */}
+        <Dialog open={showUploadDialog} onClose={() => { setShowUploadDialog(false); setUploadFile(null); }} maxWidth="sm" fullWidth>
+          <DialogTitle>Upload CSV/Excel File</DialogTitle>
+          <DialogContent>
+            <Typography variant="body2" sx={{ mb: 2 }}>
+              Upload a CSV or Excel file with exactly these columns:
+            </Typography>
+            <Typography variant="body2" component="div" sx={{ mb: 2, pl: 2 }}>
+              <strong>Required:</strong><br />
+              • <strong>user_name</strong> (or "user name")<br />
+              • <strong>user_phone</strong> (or "user phone")<br />
+              <strong>Optional:</strong><br />
+              • <strong>investigator_name</strong> (or "investigator name")<br />
+              <br />
+              <em>Note: Any extra columns will be automatically ignored.</em>
+            </Typography>
+            <input
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              onChange={(e) => setUploadFile(e.target.files[0])}
+              style={{ width: '100%', padding: '8px' }}
+            />
+            {uploadFile && (
+              <Typography variant="body2" sx={{ mt: 1, color: 'text.secondary' }}>
+                Selected: {uploadFile.name}
+              </Typography>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => { setShowUploadDialog(false); setUploadFile(null); }}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleBulkUpload} 
+              variant="contained" 
+              disabled={!uploadFile || uploading}
+            >
+              {uploading ? 'Uploading...' : 'Upload'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Upload Result Dialog */}
+        <Dialog 
+          open={showResultDialog} 
+          onClose={() => setShowResultDialog(false)}
+          maxWidth="md"
+          fullWidth
+        >
+          <DialogTitle>
+            Bulk Upload Result
+          </DialogTitle>
+          <DialogContent>
+            {uploadResult && (
+              <>
+                <Alert 
+                  severity={uploadResult.created > 0 ? "success" : "warning"} 
+                  sx={{ mb: 2 }}
+                >
+                  {uploadResult.message || `✅ Successfully stored ${uploadResult.created} record(s) in Bulk Pending!`}
+                  <br />
+                  <strong>Next Step:</strong> Go to "BULK PENDING" tab and click "CREATE SESSION" button to create actual sessions.
+                  {uploadResult.errors > 0 && (
+                    <><br /><br />⚠️ {uploadResult.errors} error(s) occurred.
+                    </>
+                  )}
+                </Alert>
+                
+                {uploadResult.errors > 0 && uploadResult.errorDetails && uploadResult.errorDetails.length > 0 && (
+                  <Box>
+                    <Typography variant="h6" sx={{ mb: 1, fontWeight: 'bold' }}>
+                      Error Details:
+                    </Typography>
+                    <Box 
+                      sx={{ 
+                        maxHeight: '400px', 
+                        overflowY: 'auto',
+                        bgcolor: 'grey.100',
+                        p: 2,
+                        borderRadius: 1,
+                        fontFamily: 'monospace',
+                        fontSize: '0.875rem'
+                      }}
+                    >
+                      {uploadResult.errorDetails.map((error, index) => (
+                        <Typography 
+                          key={index} 
+                          sx={{ 
+                            mb: 1, 
+                            color: 'error.main',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word'
+                          }}
+                        >
+                          {error}
+                        </Typography>
+                      ))}
+                    </Box>
+                  </Box>
+                )}
+              </>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setShowResultDialog(false)} variant="contained">
+              OK
+            </Button>
+          </DialogActions>
+        </Dialog>
+
         {/* Create Session Dialog */}
-        <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
+        <Dialog 
+          open={openDialog} 
+          onClose={() => {
+            setOpenDialog(false);
+            setNewSession({ userName: '', userPhone: '', userEmail: '', agentId: '' });
+          }} 
+          maxWidth="sm" 
+          fullWidth
+        >
           <DialogTitle>Create New KYC Session</DialogTitle>
           <DialogContent>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
@@ -706,6 +1049,24 @@ const AdminPanel = () => {
                 fullWidth
                 required
               />
+              <TextField
+                select
+                label="Assign to Investigator (Optional)"
+                value={newSession.agentId}
+                onChange={(e) => setNewSession({ ...newSession, agentId: e.target.value })}
+                fullWidth
+                helperText="Select investigator to assign this session, or leave empty for unassigned"
+                SelectProps={{
+                  native: true,
+                }}
+              >
+                <option value="">-- Unassigned --</option>
+                {agents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.fullName || agent.username} ({agent.username})
+                  </option>
+                ))}
+              </TextField>
               <Box sx={{ display: 'flex', gap: 1 }}>
                 <TextField
                   select
@@ -930,13 +1291,13 @@ const AdminPanel = () => {
           </DialogActions>
         </Dialog>
 
-        {/* Add Agent Dialog */}
+        {/* Add Investigator Dialog */}
         <Dialog open={openAgentDialog} onClose={() => {
           setOpenAgentDialog(false);
           setNewAgent({ username: '', password: '', fullName: '' });
           setAgentErrors({ username: '', password: '' });
         }} maxWidth="sm" fullWidth>
-          <DialogTitle>Add New Agent</DialogTitle>
+          <DialogTitle>Add New Investigator</DialogTitle>
           <DialogContent>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
               <TextField
@@ -981,7 +1342,7 @@ const AdminPanel = () => {
                 value={newAgent.fullName}
                 onChange={(e) => setNewAgent({ ...newAgent, fullName: e.target.value })}
                 fullWidth
-                helperText="Agent ka full name (optional)"
+                helperText="Investigator ka full name (optional)"
               />
             </Box>
           </DialogContent>
@@ -1003,7 +1364,7 @@ const AdminPanel = () => {
                 !!agentErrors.password
               }
             >
-              Create Agent
+              Create Investigator
             </Button>
           </DialogActions>
         </Dialog>
