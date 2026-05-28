@@ -34,6 +34,23 @@ class ExportController {
         try {
             const { sessionId } = req.params;
 
+            // #region agent log
+            const logEntryStart = {
+                id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                timestamp: Date.now(),
+                location: 'exportController.js:33',
+                message: 'PDF generation started',
+                data: {
+                    sessionId: sessionId,
+                    timestamp: new Date().toISOString()
+                },
+                sessionId: 'debug-session',
+                runId: 'run1',
+                hypothesisId: 'B'
+            };
+            fs.appendFileSync('/home/ubuntu/video_kyc/.cursor/debug.log', JSON.stringify(logEntryStart) + '\n');
+            // #endregion
+
             // Get session data with latest status
             const sessionResult = await pool.query(
                 `SELECT s.*, u.username as agent_username, u.full_name as agent_name
@@ -127,9 +144,15 @@ class ExportController {
             const faceVerificationResult = await pool.query(
                 `SELECT fv.* FROM face_verification fv
                 JOIN kyc_sessions s ON fv.session_id = s.id
-                WHERE s.session_id = $1`,
+                WHERE s.session_id = $1
+                ORDER BY fv.created_at DESC`,
                 [sessionId]
             );
+            
+            console.log(`PDF Generation: Found ${faceVerificationResult.rows.length} face verification result(s) for session ${sessionId}`);
+            if (faceVerificationResult.rows.length > 0) {
+                console.log('Face verification data:', JSON.stringify(faceVerificationResult.rows[0], null, 2));
+            }
 
             // Get video recordings
             const recordingsResult = await pool.query(
@@ -140,6 +163,30 @@ class ExportController {
             );
             
             console.log(`PDF Generation: Found ${recordingsResult.rows.length} recording(s) for session ${sessionId}`);
+
+            // #region agent log
+            const logEntry1 = {
+                id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                timestamp: Date.now(),
+                location: 'exportController.js:142',
+                message: 'Recordings query result',
+                data: {
+                    sessionId: sessionId,
+                    recordingCount: recordingsResult.rows.length,
+                    recordings: recordingsResult.rows.map(r => ({
+                        id: r.id,
+                        video_url: r.video_url,
+                        s3_key: r.s3_key,
+                        hasVideoUrl: !!r.video_url,
+                        hasS3Key: !!r.s3_key
+                    }))
+                },
+                sessionId: 'debug-session',
+                runId: 'run1',
+                hypothesisId: 'E'
+            };
+            fs.appendFileSync('/home/ubuntu/video_kyc/.cursor/debug.log', JSON.stringify(logEntry1) + '\n');
+            // #endregion
 
             // Create PDF
             const doc = new PDFDocument({ margin: 50 });
@@ -187,10 +234,11 @@ class ExportController {
             if (session.user_location) {
                 sessionInfo.push({ label: 'User Location', value: session.user_location });
             }
-            
-            // Show started_at as "Completed At" (when call started) in IST
-            if (session.started_at) {
-                sessionInfo.push({ label: 'Completed At', value: formatDateIST(session.started_at) });
+
+            // Completed At: prefer completed_at column, fallback to started_at
+            const completedAt = session.completed_at || session.started_at;
+            if (completedAt) {
+                sessionInfo.push({ label: 'Completed At', value: formatDateIST(completedAt) });
             }
             
             sessionInfo.forEach(info => {
@@ -333,17 +381,43 @@ class ExportController {
             
             if (faceVerificationResult.rows.length > 0) {
                 const fv = faceVerificationResult.rows[0];
+                
+                // Match Status with color
+                const matchStatus = fv.verification_result === 'match' ? 'MATCHED ✓' : 'NOT MATCHED ✗';
+                const statusColor = fv.verification_result === 'match' ? '#28a745' : '#dc3545';
+                
+                doc.font('Helvetica-Bold').fontSize(12).fillColor(statusColor).text(`Status: ${matchStatus}`);
+                doc.fillColor('black').fontSize(11);
+                doc.moveDown(0.2);
+                
+                doc.font('Helvetica-Bold').text('Similarity Score:', { continued: true });
+                doc.font('Helvetica').text(` ${(Number(fv.similarity_percentage) || 0).toFixed(2)}%`);
+                
                 doc.font('Helvetica-Bold').text('Match Score:', { continued: true });
-                doc.font('Helvetica').text(` ${fv.match_score || 'N/A'}`);
-                doc.font('Helvetica-Bold').text('Similarity:', { continued: true });
-                doc.font('Helvetica').text(` ${fv.similarity_percentage || 'N/A'}%`);
+                doc.font('Helvetica').text(` ${(Number(fv.match_score) || 0).toFixed(2)}`);
+                
                 doc.font('Helvetica-Bold').text('Liveness Detected:', { continued: true });
                 doc.font('Helvetica').text(` ${fv.liveness_detected ? 'Yes' : 'No'}`);
+                
+                if (fv.liveness_confidence) {
+                    doc.font('Helvetica-Bold').text('Liveness Confidence:', { continued: true });
+                    doc.font('Helvetica').text(` ${(Number(fv.liveness_confidence) || 0).toFixed(2)}%`);
+                }
+                
                 doc.font('Helvetica-Bold').text('Verification Result:', { continued: true });
                 doc.font('Helvetica').text(` ${fv.verification_result || 'N/A'}`);
+                
+                if (fv.created_at) {
+                    doc.moveDown(0.2);
+                    doc.font('Helvetica').fontSize(9).fillColor('#666666');
+                    doc.text(`Verified on: ${new Date(fv.created_at).toLocaleString()}`);
+                    doc.fillColor('black').fontSize(11);
+                }
+                
                 doc.moveDown();
             } else {
-                doc.font('Helvetica').text('No face verification data available for this session.');
+                doc.font('Helvetica').fillColor('#666666').text('No face verification data available for this session.');
+                doc.fillColor('black');
                 doc.moveDown();
             }
 
@@ -375,9 +449,62 @@ class ExportController {
                     // Try to get signed URL from s3_key first
                     if (rec.s3_key) {
                         try {
+                            // #region agent log
+                            const logEntry2 = {
+                                id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                timestamp: Date.now(),
+                                location: 'exportController.js:376',
+                                message: 'Before getVideoUrl call',
+                                data: {
+                                    recordingId: rec.id,
+                                    s3_key: rec.s3_key,
+                                    hasS3Key: !!rec.s3_key
+                                },
+                                sessionId: 'debug-session',
+                                runId: 'run1',
+                                hypothesisId: 'C'
+                            };
+                            fs.appendFileSync('/home/ubuntu/video_kyc/.cursor/debug.log', JSON.stringify(logEntry2) + '\n');
+                            // #endregion
                             videoUrlToUse = videoRecordingService.getVideoUrl(rec.s3_key, 3600);
+                            // #region agent log
+                            const logEntry3 = {
+                                id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                timestamp: Date.now(),
+                                location: 'exportController.js:379',
+                                message: 'After getVideoUrl call',
+                                data: {
+                                    recordingId: rec.id,
+                                    videoUrlToUse: videoUrlToUse,
+                                    hasVideoUrlToUse: !!videoUrlToUse,
+                                    videoUrlLength: videoUrlToUse ? videoUrlToUse.length : 0
+                                },
+                                sessionId: 'debug-session',
+                                runId: 'run1',
+                                hypothesisId: 'C'
+                            };
+                            fs.appendFileSync('/home/ubuntu/video_kyc/.cursor/debug.log', JSON.stringify(logEntry3) + '\n');
+                            // #endregion
                             console.log(`Generated signed URL for recording ${rec.id}: ${videoUrlToUse.substring(0, 50)}...`);
                         } catch (err) {
+                            // #region agent log
+                            const logEntry4 = {
+                                id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                timestamp: Date.now(),
+                                location: 'exportController.js:381',
+                                message: 'Error in getVideoUrl',
+                                data: {
+                                    recordingId: rec.id,
+                                    error: err.message,
+                                    errorStack: err.stack,
+                                    hasVideoUrl: !!rec.video_url
+                                },
+                                sessionId: 'debug-session',
+                                runId: 'run1',
+                                hypothesisId: 'C'
+                            };
+                            fs.appendFileSync('/home/ubuntu/video_kyc/.cursor/debug.log', JSON.stringify(logEntry4) + '\n');
+                            // #endregion
                             console.error('Error generating signed URL for video:', err);
                             // Fallback to video_url if signed URL generation fails
                             if (rec.video_url) {
@@ -391,20 +518,111 @@ class ExportController {
                         console.log(`Using video_url directly for recording ${rec.id}`);
                     }
                     
+                    // #region agent log
+                    const logEntry5 = {
+                        id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                        timestamp: Date.now(),
+                        location: 'exportController.js:393',
+                        message: 'Final videoUrlToUse check',
+                        data: {
+                            recordingId: rec.id,
+                            videoUrlToUse: videoUrlToUse,
+                            hasVideoUrlToUse: !!videoUrlToUse,
+                            rec_s3_key: rec.s3_key,
+                            rec_video_url: rec.video_url,
+                            hasRecS3Key: !!rec.s3_key,
+                            hasRecVideoUrl: !!rec.video_url
+                        },
+                        sessionId: 'debug-session',
+                        runId: 'run1',
+                        hypothesisId: 'A'
+                    };
+                    fs.appendFileSync('/home/ubuntu/video_kyc/.cursor/debug.log', JSON.stringify(logEntry5) + '\n');
+                    // #endregion
+                    
                     // Add link to PDF if we have a URL
                     if (videoUrlToUse) {
-                        doc.font('Helvetica-Bold').fontSize(11).fillColor('#1976d2');
-                        doc.text('View Video Recording', { 
-                            link: videoUrlToUse,
-                            underline: true
-                        });
-                        // Also add the URL as text for reference
-                        doc.moveDown(0.1);
-                        doc.font('Helvetica').fontSize(9).fillColor('gray');
-                        doc.text(`Link: ${videoUrlToUse.substring(0, 80)}${videoUrlToUse.length > 80 ? '...' : ''}`, {
-                            link: videoUrlToUse
-                        });
+                        // #region agent log
+                        const logEntry6 = {
+                            id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                            timestamp: Date.now(),
+                            location: 'exportController.js:511',
+                            message: 'Inside if block - adding link to PDF',
+                            data: {
+                                recordingId: rec.id,
+                                videoUrlToUse: videoUrlToUse,
+                                urlLength: videoUrlToUse.length
+                            },
+                            sessionId: 'debug-session',
+                            runId: 'run1',
+                            hypothesisId: 'F'
+                        };
+                        fs.appendFileSync('/home/ubuntu/video_kyc/.cursor/debug.log', JSON.stringify(logEntry6) + '\n');
+                        // #endregion
+                        try {
+                            doc.font('Helvetica-Bold').fontSize(11).fillColor('#1976d2');
+                            doc.text('View Video Recording', { 
+                                link: videoUrlToUse,
+                                underline: true
+                            });
+                            // Also add the URL as text for reference
+                            doc.moveDown(0.1);
+                            doc.font('Helvetica').fontSize(9).fillColor('gray');
+                            doc.text(`Link: ${videoUrlToUse.substring(0, 80)}${videoUrlToUse.length > 80 ? '...' : ''}`, {
+                                link: videoUrlToUse
+                            });
+                            // #region agent log
+                            const logEntry7 = {
+                                id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                timestamp: Date.now(),
+                                location: 'exportController.js:530',
+                                message: 'Link added to PDF successfully',
+                                data: {
+                                    recordingId: rec.id
+                                },
+                                sessionId: 'debug-session',
+                                runId: 'run1',
+                                hypothesisId: 'F'
+                            };
+                            fs.appendFileSync('/home/ubuntu/video_kyc/.cursor/debug.log', JSON.stringify(logEntry7) + '\n');
+                            // #endregion
+                        } catch (pdfErr) {
+                            // #region agent log
+                            const logEntry8 = {
+                                id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                timestamp: Date.now(),
+                                location: 'exportController.js:533',
+                                message: 'Error adding link to PDF',
+                                data: {
+                                    recordingId: rec.id,
+                                    error: pdfErr.message,
+                                    errorStack: pdfErr.stack
+                                },
+                                sessionId: 'debug-session',
+                                runId: 'run1',
+                                hypothesisId: 'F'
+                            };
+                            fs.appendFileSync('/home/ubuntu/video_kyc/.cursor/debug.log', JSON.stringify(logEntry8) + '\n');
+                            // #endregion
+                            console.error('Error adding link to PDF:', pdfErr);
+                        }
                     } else {
+                        // #region agent log
+                        const logEntry9 = {
+                            id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                            timestamp: Date.now(),
+                            location: 'exportController.js:550',
+                            message: 'videoUrlToUse is false/null - not adding link',
+                            data: {
+                                recordingId: rec.id,
+                                videoUrlToUse: videoUrlToUse
+                            },
+                            sessionId: 'debug-session',
+                            runId: 'run1',
+                            hypothesisId: 'F'
+                        };
+                        fs.appendFileSync('/home/ubuntu/video_kyc/.cursor/debug.log', JSON.stringify(logEntry9) + '\n');
+                        // #endregion
                         doc.font('Helvetica').fontSize(10).fillColor('red');
                         doc.text('Video recording URL not available');
                     }
@@ -439,7 +657,22 @@ class ExportController {
                 res.status(500).json({ error: 'Failed to generate PDF', details: error.message });
             } else {
                 // If headers already sent, we can't send JSON response
-                // Just log the error
+                // Try to destroy the doc stream to prevent further writes
+                try {
+                    if (doc && !doc.destroyed) {
+                        doc.destroy();
+                    }
+                } catch (destroyErr) {
+                    console.error('Error destroying PDF stream:', destroyErr);
+                }
+                // Don't try to write to response if it's already closed
+                if (!res.destroyed && !res.finished) {
+                    try {
+                        res.end();
+                    } catch (endErr) {
+                        console.error('Error ending response:', endErr);
+                    }
+                }
                 console.error('Cannot send error response - headers already sent');
             }
         }

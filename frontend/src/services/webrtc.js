@@ -342,6 +342,35 @@ class WebRTCService {
         const stats = await this.peerConnection.getStats();
         const statsData = this.parseStats(stats);
         
+        // #region agent log
+        try {
+          const payload = {
+            id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            timestamp: Date.now(),
+            location: 'webrtc.js:343',
+            message: 'WebRTC stats update',
+            data: {
+              connectionState: statsData.connectionState,
+              networkQuality: statsData.networkQuality,
+              audioQuality: statsData.audioQuality,
+              videoQuality: statsData.videoQuality,
+              audioStats: statsData.audioStats,
+              videoStats: statsData.videoStats,
+            },
+            sessionId: 'debug-session',
+            runId: 'video-stutter',
+            hypothesisId: 'stats',
+          };
+          fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          }).catch(() => {});
+        } catch (e) {
+          // ignore logging errors
+        }
+        // #endregion
+
         if (this.onStatsUpdate) {
           this.onStatsUpdate(statsData);
         }
@@ -767,7 +796,8 @@ class WebRTCService {
    */
   startRecording() {
     // #region agent log
-    fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:768',message:'startRecording called',data:{hasLocalStream:!!this.localStream,hasRemoteStream:!!this.remoteStream,remoteTracks:this.remoteStream?.getTracks()?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    const memInfo = performance.memory ? {usedJSHeapSize:performance.memory.usedJSHeapSize,totalJSHeapSize:performance.memory.totalJSHeapSize,jsHeapSizeLimit:performance.memory.jsHeapSizeLimit} : null;
+    fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:768',message:'startRecording called',data:{hasLocalStream:!!this.localStream,hasRemoteStream:!!this.remoteStream,remoteTracks:this.remoteStream?.getTracks()?.length||0,memory:memInfo},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
     // #endregion
     if (!this.localStream) {
       console.error('Cannot start recording: No local stream available');
@@ -786,7 +816,8 @@ class WebRTCService {
     console.log('Starting recording with', videoTracks.length, 'video tracks and', audioTracks.length, 'audio tracks');
     console.log('Remote stream available:', !!this.remoteStream);
     // #region agent log
-    fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:785',message:'Stream tracks check',data:{localVideoTracks:videoTracks.length,localAudioTracks:audioTracks.length,hasRemoteStream:!!this.remoteStream,remoteTracksCount:this.remoteStream?.getTracks()?.length||0,remoteVideoTracks:this.remoteStream?.getVideoTracks()?.length||0,remoteAudioTracks:this.remoteStream?.getAudioTracks()?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    const memInfo2 = performance.memory ? {usedJSHeapSize:performance.memory.usedJSHeapSize,totalJSHeapSize:performance.memory.totalJSHeapSize,jsHeapSizeLimit:performance.memory.jsHeapSizeLimit} : null;
+    fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:785',message:'Stream tracks check',data:{localVideoTracks:videoTracks.length,localAudioTracks:audioTracks.length,hasRemoteStream:!!this.remoteStream,remoteTracksCount:this.remoteStream?.getTracks()?.length||0,remoteVideoTracks:this.remoteStream?.getVideoTracks()?.length||0,remoteAudioTracks:this.remoteStream?.getAudioTracks()?.length||0,memory:memInfo2},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
     // #endregion
     if (this.remoteStream) {
       console.log('Remote stream tracks:', this.remoteStream.getTracks().length, 
@@ -809,10 +840,33 @@ class WebRTCService {
     }
 
     // Create canvas for combining both videos
+    // Detect mobile device and use lower resolution to prevent memory crashes
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+                     (window.innerWidth <= 768) || 
+                     (performance.memory && performance.memory.jsHeapSizeLimit < 1073741824); // Less than 1GB heap limit
+    
+    // Use adaptive canvas resolution based on device capabilities
+    let canvasWidth, canvasHeight;
+    if (isMobile) {
+      // Mobile: Use 720p to prevent memory crashes
+      canvasWidth = 1280;
+      canvasHeight = 720;
+      console.log('📱 Mobile device detected - using 720p canvas resolution');
+    } else {
+      // Desktop: Use 1080p
+      canvasWidth = 1920;
+      canvasHeight = 1080;
+      console.log('🖥️ Desktop device - using 1080p canvas resolution');
+    }
+    
     this.recordingCanvas = document.createElement('canvas');
-    this.recordingCanvas.width = 1920; // Full HD width for better quality
-    this.recordingCanvas.height = 1080; // Full HD height for better quality
+    this.recordingCanvas.width = canvasWidth;
+    this.recordingCanvas.height = canvasHeight;
     this.recordingCanvasContext = this.recordingCanvas.getContext('2d');
+    // #region agent log
+    const memInfo3 = performance.memory ? {usedJSHeapSize:performance.memory.usedJSHeapSize,totalJSHeapSize:performance.memory.totalJSHeapSize,jsHeapSizeLimit:performance.memory.jsHeapSizeLimit} : null;
+    fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:815',message:'Canvas created',data:{canvasWidth:this.recordingCanvas.width,canvasHeight:this.recordingCanvas.height,memory:memInfo3},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     
     // Create temporary video elements for recording
     this.localVideoElement = document.createElement('video');
@@ -825,7 +879,7 @@ class WebRTCService {
     if (this.remoteStream && this.remoteStream.getTracks().length > 0) {
       console.log('Creating remote video element for recording...');
       // #region agent log
-      fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:819',message:'Creating remote video element',data:{hasRemoteStream:!!this.remoteStream,remoteTracks:this.remoteStream.getTracks().length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:819',message:'Creating remote video element',data:{hasRemoteStream:!!this.remoteStream,remoteTracks:this.remoteStream.getTracks().length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
       // #endregion
       this.remoteVideoElement = document.createElement('video');
       this.remoteVideoElement.srcObject = this.remoteStream;
@@ -834,18 +888,18 @@ class WebRTCService {
       this.remoteVideoElement.playsInline = true;
       this.remoteVideoElement.play().then(() => {
         // #region agent log
-        fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:826',message:'Remote video play success',data:{readyState:this.remoteVideoElement?.readyState},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+        fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:826',message:'Remote video play success',data:{readyState:this.remoteVideoElement?.readyState},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
         // #endregion
       }).catch(err => {
         // #region agent log
-        fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:826',message:'Remote video play failed',data:{error:err.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+        fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:826',message:'Remote video play failed',data:{error:err.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
         // #endregion
         console.error('Error playing remote video for recording:', err);
       });
       console.log('Remote video element created and playing');
     } else {
       // #region agent log
-      fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:830',message:'No remote stream for recording',data:{hasRemoteStream:!!this.remoteStream,remoteTracks:this.remoteStream?.getTracks()?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:830',message:'No remote stream for recording',data:{hasRemoteStream:!!this.remoteStream,remoteTracks:this.remoteStream?.getTracks()?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
       // #endregion
       console.log('No remote stream available, recording with local stream only');
       this.remoteVideoElement = null;
@@ -872,19 +926,19 @@ class WebRTCService {
             attempt: attempts
           });
           // #region agent log
-          fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:845',message:'Video readiness check',data:{localReady,hasRemoteStream,remoteReady,localState:this.localVideoElement?.readyState,remoteState:this.remoteVideoElement?.readyState,attempt:attempts},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+          fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:845',message:'Video readiness check',data:{localReady,hasRemoteStream,remoteReady,localState:this.localVideoElement?.readyState,remoteState:this.remoteVideoElement?.readyState,attempt:attempts},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
           // #endregion
           
           if (localReady && remoteReady) {
             console.log('✅ All videos ready for recording');
             // #region agent log
-            fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:854',message:'All videos ready',data:{localState:this.localVideoElement?.readyState,remoteState:this.remoteVideoElement?.readyState},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+            fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:854',message:'All videos ready',data:{localState:this.localVideoElement?.readyState,remoteState:this.remoteVideoElement?.readyState},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
             // #endregion
             resolve();
           } else if (attempts >= maxAttempts) {
             console.warn('⚠️ Timeout waiting for videos, proceeding anyway...');
             // #region agent log
-            fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:858',message:'Timeout waiting for videos',data:{localState:this.localVideoElement?.readyState,remoteState:this.remoteVideoElement?.readyState,attempts},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+            fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:858',message:'Timeout waiting for videos',data:{localState:this.localVideoElement?.readyState,remoteState:this.remoteVideoElement?.readyState,attempts},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
             // #endregion
             resolve(); // Proceed even if not fully ready
           } else {
@@ -901,17 +955,53 @@ class WebRTCService {
       await waitForVideos();
       // Create combined stream from canvas FIRST (before drawing starts)
       // Canvas stream needs to be captured before drawing starts for proper initialization
-      const combinedStream = this.recordingCanvas.captureStream(30); // 30 FPS
+      // Use adaptive FPS based on device - lower for mobile to reduce memory pressure
+      const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+                             (window.innerWidth <= 768) || 
+                             (performance.memory && performance.memory.jsHeapSizeLimit < 1073741824);
+      const targetFPS = isMobileDevice ? 24 : 30; // Mobile: 24 FPS, Desktop: 30 FPS
+      const combinedStream = this.recordingCanvas.captureStream(targetFPS);
       
       // Function to draw both videos on canvas (side by side)
       let drawCount = 0;
-      const drawVideos = () => {
+      let lastMemoryLog = 0;
+      let lastDrawTime = 0;
+      const TARGET_FPS = 30; // Target 30 FPS for recording
+      const FRAME_INTERVAL = 1000 / TARGET_FPS; // ~33ms per frame
+      
+      const drawVideos = (currentTime) => {
         drawCount++;
+        
+        // Throttle drawing to target FPS to prevent excessive memory usage
+        if (currentTime - lastDrawTime < FRAME_INTERVAL) {
+          if (this.isRecording) {
+            this.recordingAnimationFrame = requestAnimationFrame(drawVideos);
+          }
+          return;
+        }
+        lastDrawTime = currentTime || performance.now();
+        
         if (!this.recordingCanvasContext || !this.isRecording) {
           // #region agent log
-          if (drawCount <= 5) fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:907',message:'drawVideos early return',data:{hasContext:!!this.recordingCanvasContext,isRecording:this.isRecording,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+          if (drawCount <= 5) {
+            const memInfo4 = performance.memory ? {usedJSHeapSize:performance.memory.usedJSHeapSize,totalJSHeapSize:performance.memory.totalJSHeapSize,jsHeapSizeLimit:performance.memory.jsHeapSizeLimit} : null;
+            fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:907',message:'drawVideos early return',data:{hasContext:!!this.recordingCanvasContext,isRecording:this.isRecording,drawCount,memory:memInfo4},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+          }
           // #endregion
           return;
+        }
+        
+        // Memory check - if memory is getting high, reduce quality or skip frame
+        if (performance.memory) {
+          const memoryUsage = performance.memory.usedJSHeapSize / performance.memory.jsHeapSizeLimit;
+          if (memoryUsage > 0.85) {
+            // Memory usage > 85% - skip this frame to prevent crash
+            console.warn('⚠️ High memory usage detected, skipping frame:', (memoryUsage * 100).toFixed(1) + '%');
+            if (this.isRecording) {
+              this.recordingAnimationFrame = requestAnimationFrame(drawVideos);
+            }
+            return;
+          }
         }
         
         const ctx = this.recordingCanvasContext;
@@ -928,6 +1018,8 @@ class WebRTCService {
         let remoteDrawn = false;
         
         // Draw local video (left side)
+        // IMPORTANT: Continue drawing even if video element is not visible in DOM
+        // Recording uses separate video elements created in memory, not DOM elements
         if (this.localVideoElement && this.localVideoElement.readyState >= 2) {
           try {
             ctx.drawImage(
@@ -937,21 +1029,24 @@ class WebRTCService {
             );
             localDrawn = true;
             // #region agent log
-            if (drawCount <= 5 || drawCount % 30 === 0) fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:923',message:'Local video drawn',data:{readyState:this.localVideoElement.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+            if (drawCount <= 5 || drawCount % 30 === 0) fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:923',message:'Local video drawn',data:{readyState:this.localVideoElement.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
             // #endregion
           } catch (err) {
             // #region agent log
-            fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:928',message:'Error drawing local video',data:{error:err.message,readyState:this.localVideoElement?.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+            fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:928',message:'Error drawing local video',data:{error:err.message,readyState:this.localVideoElement?.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
             // #endregion
             console.warn('Error drawing local video:', err);
           }
         } else {
           // #region agent log
-          if (drawCount <= 5 || drawCount % 30 === 0) fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:935',message:'Local video not ready for drawing',data:{hasElement:!!this.localVideoElement,readyState:this.localVideoElement?.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+          if (drawCount <= 5 || drawCount % 30 === 0) fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:935',message:'Local video not ready for drawing',data:{hasElement:!!this.localVideoElement,readyState:this.localVideoElement?.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
           // #endregion
         }
         
         // Draw remote video (right side)
+        // IMPORTANT: Continue drawing even if video element is not visible in DOM
+        // Recording uses separate video elements created in memory, not DOM elements
+        // This ensures recording continues even when DocumentCapture is shown
         if (this.remoteVideoElement && this.remoteVideoElement.readyState >= 2) {
           try {
             ctx.drawImage(
@@ -961,22 +1056,27 @@ class WebRTCService {
             );
             remoteDrawn = true;
             // #region agent log
-            if (drawCount <= 5 || drawCount % 30 === 0) fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:945',message:'Remote video drawn',data:{readyState:this.remoteVideoElement.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+            if (drawCount <= 5 || drawCount % 30 === 0) fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:945',message:'Remote video drawn',data:{readyState:this.remoteVideoElement.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
             // #endregion
           } catch (err) {
             // #region agent log
-            fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:950',message:'Error drawing remote video',data:{error:err.message,readyState:this.remoteVideoElement?.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+            fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:950',message:'Error drawing remote video',data:{error:err.message,readyState:this.remoteVideoElement?.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
             // #endregion
             console.warn('Error drawing remote video:', err);
           }
         } else {
           // #region agent log
-          if (drawCount <= 5 || drawCount % 30 === 0) fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:957',message:'Remote video not ready for drawing',data:{hasElement:!!this.remoteVideoElement,readyState:this.remoteVideoElement?.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+          if (drawCount <= 5 || drawCount % 30 === 0) fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:957',message:'Remote video not ready for drawing',data:{hasElement:!!this.remoteVideoElement,readyState:this.remoteVideoElement?.readyState,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
           // #endregion
         }
         
         // #region agent log
-        if (drawCount === 1 || drawCount % 30 === 0) fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:960',message:'Draw summary',data:{localDrawn,remoteDrawn,drawCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+        if (drawCount === 1 || drawCount % 30 === 0) {
+          const memInfo5 = performance.memory ? {usedJSHeapSize:performance.memory.usedJSHeapSize,totalJSHeapSize:performance.memory.totalJSHeapSize,jsHeapSizeLimit:performance.memory.jsHeapSizeLimit} : null;
+          const timeSinceLastLog = Date.now() - lastMemoryLog;
+          fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:960',message:'Draw summary',data:{localDrawn,remoteDrawn,drawCount,memory:memInfo5,timeSinceLastLog},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+          lastMemoryLog = Date.now();
+        }
         // #endregion
         
         // Draw divider line
@@ -987,7 +1087,7 @@ class WebRTCService {
         ctx.lineTo(halfWidth, fullHeight);
         ctx.stroke();
         
-        // Continue animation
+        // Continue animation with throttling
         if (this.isRecording) {
           this.recordingAnimationFrame = requestAnimationFrame(drawVideos);
         }
@@ -1044,9 +1144,14 @@ class WebRTCService {
       }
 
         this.recordedChunks = [];
+        // Adaptive bitrate based on device - lower for mobile to prevent memory issues
+        const isMobileDevice2 = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+                                (window.innerWidth <= 768) || 
+                                (performance.memory && performance.memory.jsHeapSizeLimit < 1073741824);
+        const targetBitrate = isMobileDevice2 ? 1000000 : 1500000; // Mobile: 1 Mbps, Desktop: 1.5 Mbps
         const options = {
           mimeType: 'video/webm;codecs=vp9,opus', // VP9 for better quality (if supported)
-          videoBitsPerSecond: 1500000, // 1.5 Mbps for high quality recording
+          videoBitsPerSecond: targetBitrate,
         };
 
       try {
@@ -1066,6 +1171,11 @@ class WebRTCService {
 
       this.mediaRecorder.ondataavailable = (event) => {
         console.log('Data available event, size:', event.data.size, 'bytes');
+        // #region agent log
+        const memInfo6 = performance.memory ? {usedJSHeapSize:performance.memory.usedJSHeapSize,totalJSHeapSize:performance.memory.totalJSHeapSize,jsHeapSizeLimit:performance.memory.jsHeapSizeLimit} : null;
+        const totalSize = this.recordedChunks.reduce((sum, chunk) => sum + chunk.size, 0);
+        fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:1067',message:'Data available',data:{chunkSize:event.data?.size||0,chunksCount:this.recordedChunks.length,totalSize,memory:memInfo6},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+        // #endregion
         if (event.data && event.data.size > 0) {
           this.recordedChunks.push(event.data);
           console.log('Chunk added, total chunks:', this.recordedChunks.length, 'Total size:', this.recordedChunks.reduce((sum, chunk) => sum + chunk.size, 0), 'bytes');
@@ -1114,6 +1224,10 @@ class WebRTCService {
             if (totalSize > 0) {
               const blob = new Blob(this.recordedChunks, { type: 'video/webm' });
               console.log('Recording blob created, size:', blob.size, 'bytes');
+              // #region agent log
+              const memInfo7 = performance.memory ? {usedJSHeapSize:performance.memory.usedJSHeapSize,totalJSHeapSize:performance.memory.totalJSHeapSize,jsHeapSizeLimit:performance.memory.jsHeapSizeLimit} : null;
+              fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:1115',message:'Blob created',data:{blobSize:blob.size,chunksCount:this.recordedChunks.length,memory:memInfo7},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+              // #endregion
               
               // Use stored callback reference (captured before async operations)
               // Also check current callback in case it was set again
@@ -1146,9 +1260,14 @@ class WebRTCService {
       // This will feed the canvas stream continuously
       this.isRecording = true; // Set flag BEFORE starting drawing loop
       // #region agent log
-      fetch('http://localhost:7242/ingest/6ec1c019-46be-4e89-a686-e4ae3ca5291e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:1126',message:'Starting drawVideos loop',data:{hasLocalElement:!!this.localVideoElement,hasRemoteElement:!!this.remoteVideoElement,isRecording:this.isRecording},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+      const memInfoStart = performance.memory ? {usedJSHeapSize:performance.memory.usedJSHeapSize,totalJSHeapSize:performance.memory.totalJSHeapSize,jsHeapSizeLimit:performance.memory.jsHeapSizeLimit} : null;
+      const isMobileDevice3 = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+                              (window.innerWidth <= 768) || 
+                              (performance.memory && performance.memory.jsHeapSizeLimit < 1073741824);
+      const targetFPSValue = isMobileDevice3 ? 24 : 30;
+      fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'webrtc.js:1126',message:'Starting drawVideos loop',data:{hasLocalElement:!!this.localVideoElement,hasRemoteElement:!!this.remoteVideoElement,isRecording:this.isRecording,isMobile:isMobileDevice3,canvasWidth:this.recordingCanvas.width,canvasHeight:this.recordingCanvas.height,targetFPS:targetFPSValue,memory:memInfoStart},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
       // #endregion
-      drawVideos(); // Start the continuous drawing loop
+      drawVideos(performance.now()); // Start the continuous drawing loop with timestamp
       
       // Wait a short time for first frames to be drawn, then start MediaRecorder
       setTimeout(() => {

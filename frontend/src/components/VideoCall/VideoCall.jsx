@@ -28,6 +28,7 @@ import {
 } from '@mui/icons-material';
 import webrtcService from '../../services/webrtc';
 import api from '../../services/api';
+import { sendEnvironmentTelemetry, sendCallEventTelemetry } from '../../services/telemetry';
 
 const VideoCall = ({ 
   localStream, 
@@ -58,6 +59,20 @@ const VideoCall = ({
   const [isMatchingFace, setIsMatchingFace] = useState(false);
   const [faceMatchResult, setFaceMatchResult] = useState(null);
   const [showMatchResult, setShowMatchResult] = useState(false);
+  // Remote video rendering warning
+  const [videoWarning, setVideoWarning] = useState(null);
+
+  // Investigator environment telemetry when call screen opens
+  useEffect(() => {
+    if (sessionId) {
+      try {
+        sendEnvironmentTelemetry(sessionId, 'investigator');
+        sendCallEventTelemetry(sessionId, 'investigator', 'INVESTIGATOR_CALL_SCREEN_OPENED');
+      } catch (e) {
+        console.error('Telemetry error (investigator env):', e);
+      }
+    }
+  }, [sessionId]);
 
   useEffect(() => {
     if (localVideoRef.current && localStream) {
@@ -72,6 +87,7 @@ const VideoCall = ({
       tracks: remoteStream?.getTracks()?.length,
       videoRef: !!remoteVideoRef.current
     });
+
     if (remoteVideoRef.current && remoteStream) {
       console.log('✅ Setting remote video srcObject');
       remoteVideoRef.current.srcObject = remoteStream;
@@ -79,11 +95,62 @@ const VideoCall = ({
       remoteVideoRef.current.play().catch(err => {
         console.error('Error playing remote video:', err);
       });
+
+      // Telemetry: remote video stream attached
+      if (sessionId) {
+        try {
+          sendCallEventTelemetry(sessionId, 'investigator', 'REMOTE_VIDEO_STREAM_ATTACHED', {
+            hasRemoteStream: !!remoteStream,
+            tracks: remoteStream?.getTracks()?.length || 0,
+          });
+        } catch (e) {
+          console.error('Telemetry error (remote video attached):', e);
+        }
+      }
+
+      // After a short delay, check if video is actually rendering frames
+      const checkTimeout = setTimeout(() => {
+        const videoEl = remoteVideoRef.current;
+        if (videoEl && (!videoEl.videoWidth || !videoEl.videoHeight)) {
+          const warningMessage =
+            'Remote video is connected but not rendering. This often happens when the user opens the link inside another app (WhatsApp / Facebook / banking app) or another app is using the camera. Ask the user to open this link directly in Chrome/Safari and close other video-call apps.';
+          setVideoWarning(warningMessage);
+
+          if (sessionId) {
+            try {
+              sendCallEventTelemetry(sessionId, 'investigator', 'REMOTE_VIDEO_NOT_RENDERING', {
+                videoWidth: videoEl.videoWidth || 0,
+                videoHeight: videoEl.videoHeight || 0,
+              });
+            } catch (e) {
+              console.error('Telemetry error (remote video not rendering):', e);
+            }
+          }
+        } else if (videoEl && videoEl.videoWidth && videoEl.videoHeight) {
+          // Remote video rendering correctly
+          setVideoWarning(null);
+          if (sessionId) {
+            try {
+              sendCallEventTelemetry(sessionId, 'investigator', 'REMOTE_VIDEO_RENDERING_OK', {
+                videoWidth: videoEl.videoWidth,
+                videoHeight: videoEl.videoHeight,
+              });
+            } catch (e) {
+              console.error('Telemetry error (remote video rendering ok):', e);
+            }
+          }
+        }
+      }, 3000);
+
+      return () => {
+        clearTimeout(checkTimeout);
+      };
     } else if (remoteVideoRef.current && !remoteStream) {
       console.log('⚠️ Clearing remote video srcObject');
       remoteVideoRef.current.srcObject = null;
+      setVideoWarning(null);
     }
-  }, [remoteStream]);
+  }, [remoteStream, sessionId]);
 
   // Setup stats collection
   useEffect(() => {
@@ -138,8 +205,19 @@ const VideoCall = ({
 
   // Handle face matching
   const handleFaceMatch = async () => {
-    if (!sessionId || !remoteVideoRef.current) {
-      alert('Session ID or video stream not available');
+    if (!sessionId) {
+      alert('Session ID not available');
+      return;
+    }
+    
+    if (!remoteVideoRef.current) {
+      alert('User video stream not available. Please wait for user to join.');
+      return;
+    }
+    
+    // Check if video is ready
+    if (!remoteVideoRef.current.videoWidth || !remoteVideoRef.current.videoHeight) {
+      alert('Video is not ready yet. Please wait a moment and try again.');
       return;
     }
 
@@ -479,6 +557,24 @@ const VideoCall = ({
           <Fullscreen sx={{ fontSize: 12 }} />
         </Box>
       </Paper>
+
+      {/* Remote video warning snackbar (investigator side) */}
+      <Snackbar
+        open={!!videoWarning}
+        autoHideDuration={8000}
+        onClose={() => setVideoWarning(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setVideoWarning(null)}
+          severity="warning"
+          sx={{ width: '100%' }}
+        >
+          <Typography variant="body2">
+            {videoWarning}
+          </Typography>
+        </Alert>
+      </Snackbar>
 
       {/* Controls - Fixed at bottom */}
       <Box

@@ -78,7 +78,65 @@ class VideoRecordingService {
      * @returns {string} Signed URL
      */
     getVideoUrl(s3Key, expiresIn = 3600) {
-        return s3Service.getSignedUrl(s3Key, expiresIn);
+        // #region agent log
+        const fs = require('fs');
+        const logEntry = {
+            id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            timestamp: Date.now(),
+            location: 'videoRecordingService.js:80',
+            message: 'Before getSignedUrl call',
+            data: {
+                s3Key: s3Key,
+                expiresIn: expiresIn,
+                hasS3Key: !!s3Key
+            },
+            sessionId: 'debug-session',
+            runId: 'run1',
+            hypothesisId: 'D'
+        };
+        fs.appendFileSync('/home/ubuntu/video_kyc/.cursor/debug.log', JSON.stringify(logEntry) + '\n');
+        // #endregion
+        try {
+            const url = s3Service.getSignedUrl(s3Key, expiresIn);
+            // #region agent log
+            const logEntry2 = {
+                id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                timestamp: Date.now(),
+                location: 'videoRecordingService.js:82',
+                message: 'After getSignedUrl call',
+                data: {
+                    s3Key: s3Key,
+                    url: url,
+                    hasUrl: !!url,
+                    urlLength: url ? url.length : 0
+                },
+                sessionId: 'debug-session',
+                runId: 'run1',
+                hypothesisId: 'D'
+            };
+            fs.appendFileSync('/home/ubuntu/video_kyc/.cursor/debug.log', JSON.stringify(logEntry2) + '\n');
+            // #endregion
+            return url;
+        } catch (err) {
+            // #region agent log
+            const logEntry3 = {
+                id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                timestamp: Date.now(),
+                location: 'videoRecordingService.js:95',
+                message: 'Error in getSignedUrl',
+                data: {
+                    s3Key: s3Key,
+                    error: err.message,
+                    errorStack: err.stack
+                },
+                sessionId: 'debug-session',
+                runId: 'run1',
+                hypothesisId: 'D'
+            };
+            fs.appendFileSync('/home/ubuntu/video_kyc/.cursor/debug.log', JSON.stringify(logEntry3) + '\n');
+            // #endregion
+            throw err;
+        }
     }
 
     /**

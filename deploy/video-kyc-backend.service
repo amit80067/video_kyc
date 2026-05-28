@@ -1,0 +1,21 @@
+[Unit]
+Description=Video KYC backend (Node.js)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/video_kyc/backend
+Environment=NODE_ENV=production
+Environment=PORT=8005
+# Load DB/AWS keys from backend .env (dotenv in app also loads this file)
+EnvironmentFile=-/home/ubuntu/video_kyc/backend/.env
+ExecStart=/home/ubuntu/video_kyc/backend/systemd-exec.sh
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

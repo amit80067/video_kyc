@@ -26,7 +26,7 @@ function App() {
       <Router>
         <Routes>
           <Route path="/" element={<Navigate to="/investigator/login" replace />} />
-          <Route path="/join/:sessionId" element={<UserJoinPage />} />
+          <Route path="/join/*" element={<UserJoinPage />} />
           <Route path="/investigator/login" element={<InvestigatorLogin />} />
           <Route path="/investigator/dashboard" element={<InvestigatorDashboard />} />
           <Route path="/admin" element={<AdminPanel />} />

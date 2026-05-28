@@ -1,18 +1,32 @@
 const pool = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const smsService = require('../services/smsService');
+const { validateIndianMobile } = require('../utils/phoneValidation');
 const emailService = require('../services/emailService');
 const ipLocationService = require('../services/ipLocationService');
 const ExcelJS = require('exceljs');
 const fs = require('fs');
 const csv = require('csv-parser');
 const path = require('path');
+const { buildJoinLink, getFrontendBase } = require('../utils/joinLink');
 
 class SessionController {
     async createSession(req, res) {
         try {
             const { userName, userPhone, userEmail, agentId } = req.body;
             const userRole = req.user.role;
+
+            if (!userName || !String(userName).trim()) {
+                return res.status(400).json({ error: 'User name is required' });
+            }
+            if (!userPhone || !String(userPhone).trim()) {
+                return res.status(400).json({ error: 'Mobile number is required' });
+            }
+            const phoneCheck = validateIndianMobile(userPhone);
+            if (!phoneCheck.ok) {
+                return res.status(400).json({ error: phoneCheck.error });
+            }
+            const normalizedPhone = phoneCheck.e164;
             
             // If admin creates session, use agentId from request (can be null for unassigned)
             // If agent creates session, use their ID (ignore agentId from request for security)
@@ -27,45 +41,43 @@ class SessionController {
 
             // Generate unique session ID and join link
             const sessionId = uuidv4();
-            const joinLink = `${process.env.FRONTEND_URL || 'https://kyc.virtualinvestigation.xyz'}/join/${sessionId}`;
+            const joinLink = buildJoinLink(sessionId);
             
-            // Link expires in 24 hours
+            // Link expires in 72 hours
             const linkExpiresAt = new Date();
-            linkExpiresAt.setHours(linkExpiresAt.getHours() + 24);
+            linkExpiresAt.setHours(linkExpiresAt.getHours() + 72);
 
             const result = await pool.query(
                 `INSERT INTO kyc_sessions 
                 (session_id, user_name, user_phone, user_email, agent_id, join_link, link_expires_at, status)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 RETURNING *`,
-                [sessionId, userName, userPhone, userEmail, finalAgentId, joinLink, linkExpiresAt, 'not_started']
+                [sessionId, userName, normalizedPhone, userEmail, finalAgentId, joinLink, linkExpiresAt, 'not_started']
             );
 
             // Send SMS to user with verification link
             let smsSent = false;
             let smsError = null;
-            
-            if (userPhone && smsService.isAvailable()) {
+            let smsWarning = null;
+
+            if (smsService.isAvailable()) {
                 try {
-                    console.log(`Attempting to send SMS for session ${sessionId} to ${userPhone}`);
-                    const smsResult = await smsService.sendVerificationSMS(userPhone, userName, joinLink);
+                    console.log(`Attempting to send SMS for session ${sessionId} to ${normalizedPhone}`);
+                    const smsResult = await smsService.sendVerificationSMS(normalizedPhone, userName, joinLink);
                     smsSent = smsResult.success;
-                    console.log(`✅ SMS sent successfully to ${userPhone} for session ${sessionId}`);
+                    smsWarning = smsResult.dltWarning || null;
+                    console.log(`✅ SMS sent successfully to ${normalizedPhone} for session ${sessionId}`);
                 } catch (smsErr) {
-                    // Log error but don't fail the session creation
                     smsError = smsErr.message || 'Unknown SMS error';
-                    console.error(`❌ Failed to send SMS to ${userPhone}:`, smsErr);
+                    console.error(`❌ Failed to send SMS to ${normalizedPhone}:`, smsErr);
                     console.error('SMS Error details:', {
                         message: smsErr.message,
                         stack: smsErr.stack
                     });
-                    // Session created successfully, just SMS failed
                 }
-            } else if (userPhone && !smsService.isAvailable()) {
-                console.warn('⚠️ SMS service not available. Twilio credentials missing or not initialized.');
+            } else {
+                console.warn('⚠️ SMS service not available. Set HiTech (HITECH_SMS_API_KEY + HITECH_SMS_SENDER_ID) or Twilio.');
                 smsError = 'SMS service not available';
-            } else if (!userPhone) {
-                console.log('No phone number provided, skipping SMS');
             }
 
             // Send Email to user with verification link
@@ -100,6 +112,7 @@ class SessionController {
                 session: result.rows[0],
                 smsSent: smsSent,
                 smsError: smsError || null,
+                smsWarning: smsWarning || null,
                 emailSent: emailSent,
                 emailError: emailError || null
             });
@@ -151,15 +164,16 @@ class SessionController {
     async getSessionByLink(req, res) {
         try {
             const { joinLink } = req.params;
-            const fullLink = `${process.env.FRONTEND_URL || 'https://kyc.virtualinvestigation.xyz'}/join/${joinLink}`;
+            const built = buildJoinLink(joinLink);
+            const legacy = `${getFrontendBase()}/join/${joinLink}`;
 
             const result = await pool.query(
                 `SELECT s.*, 
                 u.username as agent_username, u.full_name as agent_name
                 FROM kyc_sessions s
                 LEFT JOIN users u ON s.agent_id = u.id
-                WHERE s.join_link = $1 OR s.session_id = $2`,
-                [fullLink, joinLink]
+                WHERE s.session_id = $1 OR s.join_link = $2 OR s.join_link = $3`,
+                [joinLink, built, legacy]
             );
 
             if (result.rows.length === 0) {
@@ -774,6 +788,14 @@ class SessionController {
 
             const bulkData = bulkDataResult.rows[0];
 
+            const phoneCheck = validateIndianMobile(bulkData.user_phone);
+            if (!phoneCheck.ok) {
+                return res.status(400).json({
+                    error: phoneCheck.error || 'Invalid mobile number in bulk record',
+                });
+            }
+            const normalizedBulkPhone = phoneCheck.e164;
+
             // Verify investigator has access (admin can access any, agent only their own or unassigned)
             if (userRole !== 'admin' && bulkData.agent_id !== investigatorId && bulkData.agent_id !== null) {
                 return res.status(403).json({ error: 'You do not have access to this data' });
@@ -788,11 +810,11 @@ class SessionController {
 
             // NOW CREATE THE ACTUAL SESSION
             const newSessionId = uuidv4();
-            const joinLink = `${process.env.FRONTEND_URL || 'https://kyc.virtualinvestigation.xyz'}/join/${newSessionId}`;
+            const joinLink = buildJoinLink(newSessionId);
             
-            // Link expires in 24 hours
+            // Link expires in 72 hours
             const linkExpiresAt = new Date();
-            linkExpiresAt.setHours(linkExpiresAt.getHours() + 24);
+            linkExpiresAt.setHours(linkExpiresAt.getHours() + 72);
 
             // Create actual session in kyc_sessions table
             const createResult = await pool.query(
@@ -800,7 +822,7 @@ class SessionController {
                 (session_id, user_name, user_phone, user_email, agent_id, status, join_link, link_expires_at, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, 'not_started', $6, $7, NOW(), NOW())
                 RETURNING *`,
-                [newSessionId, bulkData.user_name, bulkData.user_phone, bulkData.user_email || null, assignedAgentId, joinLink, linkExpiresAt]
+                [newSessionId, bulkData.user_name, normalizedBulkPhone, bulkData.user_email || null, assignedAgentId, joinLink, linkExpiresAt]
             );
 
             const session = createResult.rows[0];
@@ -814,22 +836,24 @@ class SessionController {
             // Send SMS to user
             let smsSent = false;
             let smsError = null;
-            
-            if (session.user_phone && smsService.isAvailable()) {
+            let smsWarning = null;
+
+            if (smsService.isAvailable()) {
                 try {
                     console.log(`Attempting to send SMS for session ${newSessionId} to ${session.user_phone}`);
                     const smsResult = await smsService.sendVerificationSMS(
-                        session.user_phone, 
-                        session.user_name, 
+                        session.user_phone,
+                        session.user_name,
                         joinLink
                     );
                     smsSent = smsResult.success;
+                    smsWarning = smsResult.dltWarning || null;
                     console.log(`✅ SMS sent successfully to ${session.user_phone} for session ${newSessionId}`);
                 } catch (smsErr) {
                     smsError = smsErr.message || 'Unknown SMS error';
                     console.error(`❌ Failed to send SMS to ${session.user_phone}:`, smsErr);
                 }
-            } else if (session.user_phone && !smsService.isAvailable()) {
+            } else {
                 smsError = 'SMS service not available';
             }
 
@@ -838,6 +862,7 @@ class SessionController {
                 session: session,
                 smsSent: smsSent,
                 smsError: smsError,
+                smsWarning: smsWarning || null,
                 message: 'Session created successfully from bulk upload data'
             });
         } catch (error) {

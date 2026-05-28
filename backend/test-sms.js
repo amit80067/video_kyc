@@ -2,7 +2,7 @@ require('dotenv').config();
 const smsService = require('./src/services/smsService');
 
 async function testSMS() {
-    const testPhone = '+918006714535'; // User provided number with country code
+    const testPhone = '+919690793617'; // User provided number with country code
     const testName = 'Test User';
     const testLink = 'https://kyc.virtualinvestigation.xyz/join/test-session-123';
 
@@ -14,7 +14,9 @@ async function testSMS() {
     console.log('');
 
     if (!smsService.isAvailable()) {
-        console.error('❌ SMS service is not available. Check Twilio credentials in .env');
+        console.error(
+            '❌ SMS service is not available. Set HiTech (HITECH_SMS_API_KEY + HITECH_SMS_SENDER_ID) or Twilio in .env'
+        );
         process.exit(1);
     }
 

@@ -24,6 +24,7 @@ import {
 } from '@mui/icons-material';
 import api from '../../services/api';
 import VideoCall from '../VideoCall/VideoCall';
+import MeetingViewChime from '../VideoCall/MeetingViewChime';
 import DocumentCapture from '../DocumentCapture/DocumentCapture';
 import webrtcService from '../../services/webrtc';
 
@@ -98,6 +99,17 @@ const InvestigatorDashboard = () => {
       }
 
       setSelectedSession(session);
+
+      if (process.env.REACT_APP_USE_CHIME === 'true') {
+        if (!session.agent_id) {
+          const userStr = localStorage.getItem('user');
+          const user = JSON.parse(userStr);
+          await api.put(`/sessions/${session.session_id}/assign`, { agentId: user.id });
+        }
+        await api.put(`/sessions/${session.session_id}/status`, { status: 'in_progress' });
+        setInCall(true);
+        return;
+      }
 
       // If session is unassigned (agent_id is null), assign it to current investigator
       if (!session.agent_id) {
@@ -271,19 +283,23 @@ const InvestigatorDashboard = () => {
             screenRecordingStarted = false;
           }
           
-          // User disconnect ho gaya - session expire kar do
-          const currentSession = selectedSession;
-          if (currentSession && currentSession.session_id) {
-            try {
-              await api.put(`/sessions/${currentSession.session_id}/status`, {
-                status: 'expired',
-                notes: 'Call ended by user - session expired',
-              });
-            } catch (err) {
-              console.error('Failed to update status:', err);
+          // IMPORTANT: Continue video recording for a few more seconds to capture final moments
+          // Then update session status and end call
+          setTimeout(async () => {
+            // User disconnect ho gaya - session expire kar do
+            const currentSession = selectedSession;
+            if (currentSession && currentSession.session_id) {
+              try {
+                await api.put(`/sessions/${currentSession.session_id}/status`, {
+                  status: 'expired',
+                  notes: 'Call ended by user - session expired',
+                });
+              } catch (err) {
+                console.error('Failed to update status:', err);
+              }
             }
-          }
-          handleEndCall();
+            handleEndCall();
+          }, 3000); // Wait 3 seconds before ending to allow recording to continue
         });
         
         // Handle existing users - if user already joined, create offer
@@ -574,13 +590,66 @@ const InvestigatorDashboard = () => {
   };
 
   if (inCall && selectedSession) {
-    // Document capture screen
+    const userStr = localStorage.getItem('user');
+    const user = userStr ? JSON.parse(userStr) : null;
+    const investigatorName = user?.full_name || user?.username || 'Investigator';
+    const userName = selectedSession?.user_name || 'User';
+
+    // Chime: keep call + recording running when Document Capture is open (don't unmount MeetingViewChime)
+    if (process.env.REACT_APP_USE_CHIME === 'true') {
+      return (
+        <Box sx={{ height: '100vh', overflow: 'hidden', position: 'relative' }}>
+          <Box
+            sx={{
+              visibility: showDocumentCapture ? 'hidden' : 'visible',
+              position: showDocumentCapture ? 'absolute' : 'relative',
+              width: '100%',
+              height: '100%',
+              zIndex: 0,
+            }}
+          >
+            <MeetingViewChime
+              sessionId={selectedSession?.session_id}
+              role="investigator"
+              onEndCall={handleEndCall}
+              showDocumentCapture={true}
+              onDocumentCapture={handleDocumentCapture}
+            />
+          </Box>
+          {showDocumentCapture && (
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                zIndex: 10,
+                bgcolor: 'background.paper',
+                overflow: 'auto',
+              }}
+            >
+              <Container maxWidth="md" sx={{ py: 2 }}>
+                <DocumentCapture
+                  sessionId={selectedSession.session_id}
+                  remoteStream={remoteStream}
+                  onBack={() => setShowDocumentCapture(false)}
+                  onUploaded={handleDocumentUploaded}
+                />
+              </Container>
+            </Box>
+          )}
+        </Box>
+      );
+    }
+
+    // WebRTC: document capture screen (full replace)
     if (showDocumentCapture) {
       return (
         <Container maxWidth="md">
           <Box sx={{ mt: 2 }}>
-            <DocumentCapture 
-              sessionId={selectedSession.session_id} 
+            <DocumentCapture
+              sessionId={selectedSession.session_id}
               remoteStream={remoteStream}
               onBack={() => setShowDocumentCapture(false)}
               onUploaded={handleDocumentUploaded}
@@ -590,12 +659,7 @@ const InvestigatorDashboard = () => {
       );
     }
 
-    // Video call screen
-    const userStr = localStorage.getItem('user');
-    const user = userStr ? JSON.parse(userStr) : null;
-    const investigatorName = user?.full_name || user?.username || 'Investigator';
-    const userName = selectedSession?.user_name || 'User';
-
+    // WebRTC: video call screen
     return (
       <Box sx={{ height: '100vh', overflow: 'hidden' }}>
         <VideoCall

@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useParams, useLocation } from 'react-router-dom';
 import {
   Container,
   Box,
@@ -24,28 +24,76 @@ import {
   LocationOn,
 } from '@mui/icons-material';
 import VideoCall from '../components/VideoCall/VideoCall';
+import MeetingViewChime from '../components/VideoCall/MeetingViewChime';
 import api from '../services/api';
 import webrtcService from '../services/webrtc';
+import { sendEnvironmentTelemetry, sendCallEventTelemetry } from '../services/telemetry';
+
+/** Supports /join/:uuid and /join/?32hex (DLT query-pair links). */
+function parseJoinSessionIdFromLocation(pathname, search, pathSplat) {
+  const rest = String(pathSplat || '')
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '');
+  if (rest && !rest.includes('/')) {
+    return rest;
+  }
+  const q = String(search || '').replace(/^\?/, '');
+  if (q.length === 32 && /^[0-9a-fA-F]+$/.test(q)) {
+    const h = q.toLowerCase();
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
+  return null;
+}
 
 const UserJoinPage = () => {
-  const { sessionId } = useParams();
+  const params = useParams();
+  const location = useLocation();
+  const pathSplat = params['*'];
+  const sessionId = useMemo(
+    () => parseJoinSessionIdFromLocation(location.pathname, location.search, pathSplat),
+    [location.pathname, location.search, pathSplat]
+  );
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [step, setStep] = useState('instructions'); // instructions, consent, audioVideoCheck, join, video
+  const [step, setStep] = useState('join'); // instructions, consent, audioVideoCheck, join, video
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [audioVideoChecked, setAudioVideoChecked] = useState(false);
   const [previewStream, setPreviewStream] = useState(null);
   const previewVideoRef = useRef(null);
+  const autoJoinTriggeredRef = useRef(false);
 
   useEffect(() => {
+    if (!sessionId) {
+      setError('Invalid or missing join link. Please use the link sent by SMS or email.');
+      setLoading(false);
+      return;
+    }
     loadSession();
+    // Capture environment info when user opens join link
+    try {
+      sendEnvironmentTelemetry(sessionId, 'user');
+      sendCallEventTelemetry(sessionId, 'user', 'USER_PAGE_OPENED', {
+        step: 'instructions',
+      });
+    } catch (e) {
+      // non-blocking
+      console.error('Telemetry error (user join page):', e);
+    }
     return () => {
       webrtcService.endCall();
     };
   }, [sessionId]);
+
+  // Auto-join immediately after session is loaded (skip instructions/consent/check screens)
+  useEffect(() => {
+    if (!loading && !error && session && !autoJoinTriggeredRef.current && step !== 'video') {
+      autoJoinTriggeredRef.current = true;
+      handleJoinCall(session);
+    }
+  }, [loading, error, session, step]);
 
   // Audio/Video Check Step - useEffect for preview (must be at top level, before any conditional returns)
   useEffect(() => {
@@ -93,10 +141,82 @@ const UserJoinPage = () => {
           if (previewVideoRef.current) {
             previewVideoRef.current.srcObject = stream;
           }
-          // Auto-enable proceed button after 30 seconds
+          
+          // Actually verify that camera and mic are working
+          const verifyDevices = () => {
+            const video = previewVideoRef.current;
+            const videoTracks = stream.getVideoTracks();
+            const audioTracks = stream.getAudioTracks();
+            
+            // Check if video track exists and is active
+            const hasVideo = videoTracks.length > 0 && videoTracks[0].readyState === 'live';
+            
+            // Check if audio track exists and is active
+            const hasAudio = audioTracks.length > 0 && audioTracks[0].readyState === 'live';
+            
+            // Check if video element is playing and has dimensions
+            const videoPlaying = video && 
+                                video.readyState >= 2 && 
+                                video.videoWidth > 0 && 
+                                video.videoHeight > 0;
+            
+            console.log('Device verification:', {
+              hasVideo,
+              hasAudio,
+              videoPlaying,
+              videoWidth: video?.videoWidth,
+              videoHeight: video?.videoHeight,
+              videoReadyState: video?.readyState
+            });
+            
+            if (hasVideo && hasAudio && videoPlaying) {
+              console.log('✅ Camera and mic verified - enabling proceed button');
+              setAudioVideoChecked(true);
+              return true;
+            }
+            return false;
+          };
+          
+          // Try to verify immediately
+          if (verifyDevices()) {
+            return; // Already verified
+          }
+          
+          // Wait for video to load, then verify
+          if (previewVideoRef.current) {
+            previewVideoRef.current.onloadedmetadata = () => {
+              if (verifyDevices()) {
+                return; // Verified
+              }
+              // If not verified yet, try again after a short delay
+              setTimeout(() => {
+                if (verifyDevices()) {
+                  return;
+                }
+                // Fallback: Auto-enable after 10 seconds if verification fails
+                timer = setTimeout(() => {
+                  console.warn('⚠️ Auto-enabling proceed button after timeout');
+                  setAudioVideoChecked(true);
+                }, 10000);
+              }, 1000);
+            };
+          }
+          
+          // Fallback: Auto-enable after 10 seconds if video doesn't load
+          let verified = false;
+          const checkVerified = () => {
+            if (!verified && verifyDevices()) {
+              verified = true;
+            }
+          };
+          
           timer = setTimeout(() => {
-            setAudioVideoChecked(true);
-          }, 30000);
+            checkVerified();
+            if (!verified) {
+              console.warn('⚠️ Auto-enabling proceed button after 10 seconds timeout');
+              setAudioVideoChecked(true);
+            }
+          }, 10000);
         } catch (err) {
           console.error('Failed to get media:', err);
           
@@ -106,11 +226,11 @@ const UserJoinPage = () => {
           if (!navigator.mediaDevices && window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
             errorMsg += 'HTTPS is required for camera/microphone access. Please use HTTPS or contact support.';
           } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-            errorMsg += 'Please allow camera and microphone permissions in your browser settings and refresh the page.';
+            errorMsg += 'You denied camera/mic permissions. Please enable them in your browser settings and refresh the page.';
           } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
             errorMsg += 'No camera or microphone found. Please connect a device and try again.';
           } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-            errorMsg += 'Camera or microphone is already in use by another application.';
+            errorMsg += 'Camera or microphone is already in use by another application (WhatsApp / Zoom / banking app). Please close other apps using the camera and try again.';
           } else if (err.name === 'SecurityError') {
             errorMsg += 'HTTPS is required for camera/microphone access. Please use HTTPS.';
           } else {
@@ -129,6 +249,19 @@ const UserJoinPage = () => {
             hostname: window.location.hostname,
             hasMediaDevices: !!navigator.mediaDevices
           });
+
+          // Telemetry: preview media error
+          try {
+            sendCallEventTelemetry(sessionId, 'user', 'PREVIEW_MEDIA_ERROR', {
+              errorName: err.name,
+              message: err.message,
+              protocol: window.location.protocol,
+              hostname: window.location.hostname,
+              hasMediaDevices: !!navigator.mediaDevices,
+            });
+          } catch (e) {
+            console.error('Telemetry error (preview media):', e);
+          }
         }
       };
 
@@ -155,6 +288,11 @@ const UserJoinPage = () => {
   }, [step]);
 
   const loadSession = async () => {
+    if (!sessionId) {
+      setError('Invalid or missing join link.');
+      setLoading(false);
+      return;
+    }
     try {
       const response = await api.get(`/sessions/link/${sessionId}`);
       const sessionData = response.data.session;
@@ -174,17 +312,19 @@ const UserJoinPage = () => {
     }
   };
 
-  const handleJoinCall = async () => {
+  const handleJoinCall = async (sessionOverride = null) => {
     try {
+      const currentSession = sessionOverride || session;
+
       // Check if session is still valid before joining
-      if (!session) {
+      if (!currentSession) {
         setError('Session not found');
         return;
       }
 
       // Real-time session status check from backend before joining
       try {
-        const statusCheck = await api.get(`/api/sessions/link/${sessionId}`);
+        const statusCheck = await api.get(`/sessions/link/${sessionId}`);
         const currentSession = statusCheck.data.session;
         
         // Check if session is expired or closed
@@ -207,8 +347,16 @@ const UserJoinPage = () => {
       }
 
       // Double check session status before joining
-      if (['expired', 'cancelled', 'completed', 'rejected'].includes(session.status)) {
+      if (['expired', 'cancelled', 'completed', 'rejected'].includes(currentSession.status)) {
         setError('This session has expired or been closed. Please contact support.');
+        return;
+      }
+
+      // Log join attempt
+      sendCallEventTelemetry(sessionId, 'user', 'USER_JOIN_CALL_ATTEMPT');
+
+      if (process.env.REACT_APP_USE_CHIME === 'true') {
+        setStep('video');
         return;
       }
 
@@ -238,20 +386,27 @@ const UserJoinPage = () => {
       };
       webrtcService.onConnectionStateChange = (state) => {
         console.log('Connection state:', state);
-        // Agar connection disconnect ho gaya to status update
-        if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-          // Stop recording before ending call
-          if (webrtcService.isRecording) {
-            console.log('Stopping recording due to disconnect');
-            webrtcService.stopRecording();
-            // Wait for recording to process (5 seconds)
-            setTimeout(() => {
+        // IMPORTANT: Don't stop recording on temporary disconnect
+        // Recording should continue until session actually ends
+        // Only handle call end if connection is permanently closed
+        if (state === 'closed') {
+          // Connection permanently closed - wait a bit then end call
+          // But don't stop recording immediately - let it continue if streams are still active
+          console.log('Connection permanently closed, ending call after delay');
+          setTimeout(() => {
+            // Only stop recording if streams are actually stopped
+            if (webrtcService.isRecording && (!webrtcService.localStream || !webrtcService.remoteStream)) {
+              console.log('Stopping recording - streams are stopped');
+              webrtcService.stopRecording();
+              setTimeout(() => {
+                handleEndCall();
+              }, 5000);
+            } else {
               handleEndCall();
-            }, 5000);
-          } else {
-            handleEndCall();
-          }
+            }
+          }, 2000);
         }
+        // Note: 'disconnected' and 'failed' are temporary states - don't stop recording
       };
       
       // User disconnect event handle
@@ -266,17 +421,20 @@ const UserJoinPage = () => {
           console.log('User left:', data);
           // Investigator disconnect ho gaya
           alert('Investigator has left the call');
-          // Stop recording before ending call
-          if (webrtcService.isRecording) {
-            console.log('Stopping recording due to user-left');
-            webrtcService.stopRecording();
-            // Wait for recording to process (5 seconds)
-            setTimeout(() => {
+          // IMPORTANT: Continue recording for a few more seconds to capture any final moments
+          // Then stop recording and end call
+          setTimeout(() => {
+            if (webrtcService.isRecording) {
+              console.log('Stopping recording after user left (delayed)');
+              webrtcService.stopRecording();
+              // Wait for recording to process (5 seconds)
+              setTimeout(() => {
+                handleEndCall();
+              }, 5000);
+            } else {
               handleEndCall();
-            }, 5000);
-          } else {
-            handleEndCall();
-          }
+            }
+          }, 3000); // Wait 3 seconds before stopping recording
         });
         
         // Handle session expired event from server
@@ -344,10 +502,22 @@ const UserJoinPage = () => {
       }
       
       console.log('🎥 Starting recording with sessionId:', currentSessionId);
+      // #region agent log
+      const memInfoJoin = performance.memory ? {usedJSHeapSize:performance.memory.usedJSHeapSize,totalJSHeapSize:performance.memory.totalJSHeapSize,jsHeapSizeLimit:performance.memory.jsHeapSizeLimit} : null;
+      fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'UserJoinPage.jsx:346',message:'Before startRecording',data:{sessionId:currentSessionId,hasLocalStream:!!stream,memory:memInfoJoin},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       webrtcService.startRecording();
+      // #region agent log
+      const memInfoJoin2 = performance.memory ? {usedJSHeapSize:performance.memory.usedJSHeapSize,totalJSHeapSize:performance.memory.totalJSHeapSize,jsHeapSizeLimit:performance.memory.jsHeapSizeLimit} : null;
+      fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'UserJoinPage.jsx:348',message:'After startRecording',data:{sessionId:currentSessionId,memory:memInfoJoin2},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       webrtcService.onRecordingComplete = async (blob) => {
         // Upload recording when call ends
         console.log('🎥 Recording complete callback triggered, blob size:', blob.size, 'bytes');
+        // #region agent log
+        const memInfoBlob = performance.memory ? {usedJSHeapSize:performance.memory.usedJSHeapSize,totalJSHeapSize:performance.memory.totalJSHeapSize,jsHeapSizeLimit:performance.memory.jsHeapSizeLimit} : null;
+        fetch('http://localhost:7243/ingest/9d5dbcb0-ce84-440d-85f5-3ff39b360db2',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'UserJoinPage.jsx:348',message:'onRecordingComplete called',data:{blobSize:blob?.size||0,memory:memInfoBlob},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+        // #endregion
         if (!blob || blob.size === 0) {
           console.error('❌ Recording blob is empty, cannot upload');
           return;
@@ -454,7 +624,9 @@ const UserJoinPage = () => {
       }
     } finally {
       webrtcService.endCall();
-      setStep('join');
+      // After call ends, show completion message instead of going back to join
+      // This prevents showing expired session error
+      setStep('completed');
       setLocalStream(null);
       setRemoteStream(null);
     }
@@ -660,12 +832,12 @@ const UserJoinPage = () => {
             <List sx={{ mt: 2 }}>
               <ListItem>
                 <ListItemText 
-                  primary="Your Video interaction session with the VKYC Agent will be in the recording mode."
+                  primary="Your Video interaction session with the VKYC investigator will be in the recording mode."
                 />
               </ListItem>
               <ListItem>
                 <ListItemText 
-                  primary="A live Photograph will be captured during the Video interaction session with the VKYC Agent."
+                  primary="A live Photograph will be captured during the Video interaction session with the VKYC investigator."
                 />
               </ListItem>
               <ListItem>
@@ -845,7 +1017,7 @@ const UserJoinPage = () => {
             </Box>
 
             <Alert severity="info" sx={{ mb: 2 }}>
-              If the Proceed button does not enable in 30 seconds. Please close the pop-up and join the call again
+              If the Proceed button does not enable in 10 seconds. Please close the pop-up and join the call again
             </Alert>
 
             <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
@@ -923,6 +1095,19 @@ const UserJoinPage = () => {
     const userName = session?.user_name || 'You';
     const agentName = session?.agent_name || session?.agent_username || 'Agent';
 
+    if (process.env.REACT_APP_USE_CHIME === 'true') {
+      return (
+        <Box sx={{ height: '100vh', overflow: 'hidden' }}>
+          <MeetingViewChime
+            sessionId={sessionId}
+            role="user"
+            onEndCall={handleEndCall}
+            showDocumentCapture={false}
+          />
+        </Box>
+      );
+    }
+
     return (
       <Box sx={{ height: '100vh', overflow: 'hidden' }}>
         <VideoCall
@@ -936,6 +1121,60 @@ const UserJoinPage = () => {
           sessionId={sessionId}
         />
       </Box>
+    );
+  }
+
+  // Completion step - shown after call ends successfully
+  if (step === 'completed') {
+    return (
+      <Container maxWidth="sm">
+        <Box
+          display="flex"
+          flexDirection="column"
+          alignItems="center"
+          justifyContent="center"
+          minHeight="100vh"
+          gap={3}
+        >
+          <Paper elevation={3} sx={{ p: 4, width: '100%', textAlign: 'center' }}>
+            <Box sx={{ mb: 3 }}>
+              <CheckCircle sx={{ fontSize: 80, color: 'success.main', mb: 2 }} />
+              <Typography variant="h4" gutterBottom color="success.main" fontWeight="bold">
+                Verification Complete
+              </Typography>
+              <Typography variant="h6" gutterBottom color="text.secondary">
+                Video KYC Verification
+              </Typography>
+            </Box>
+
+            <Alert severity="success" sx={{ mb: 3 }}>
+              <Typography variant="body1" fontWeight="bold" gutterBottom>
+                Thank you for completing the video KYC verification.
+              </Typography>
+              <Typography variant="body2">
+                Your session has been completed successfully. The verification process is now complete.
+              </Typography>
+            </Alert>
+
+            <Box sx={{ mt: 4, p: 3, bgcolor: '#f5f5f5', borderRadius: 2 }}>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                <strong>What's next?</strong>
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Your verification has been submitted and is being processed. You will be contacted by your service provider if any additional information is required.
+              </Typography>
+            </Box>
+
+            {sessionId && (
+              <Box sx={{ mt: 3 }}>
+                <Typography variant="caption" color="text.secondary">
+                  Session ID: {sessionId}
+                </Typography>
+              </Box>
+            )}
+          </Paper>
+        </Box>
+      </Container>
     );
   }
 

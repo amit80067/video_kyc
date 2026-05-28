@@ -44,9 +44,16 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      window.location.href = '/investigator/login';
+      // Only redirect to login if we're NOT on a user join page
+      // User pages don't require authentication, so don't redirect them
+      const isUserPage = window.location.pathname.startsWith('/join');
+      
+      if (!isUserPage) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        window.location.href = '/investigator/login';
+      }
+      // For user pages, just reject the error without redirecting
     }
     return Promise.reject(error);
   }

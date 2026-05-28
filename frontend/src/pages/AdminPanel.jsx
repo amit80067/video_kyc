@@ -35,8 +35,19 @@ import {
   People,
   Upload,
   PlayArrow,
+  ContentCopy,
+  CheckCircle,
 } from '@mui/icons-material';
 import api from '../services/api';
+
+const DOCUMENT_TYPE_LABELS = {
+  aadhaar: 'Aadhaar Card',
+  pan: 'PAN Card',
+  passport: 'Passport',
+  user_photo: 'User Photo',
+  other: 'Other',
+};
+const getDocumentTypeLabel = (type) => DOCUMENT_TYPE_LABELS[type] || (type || 'Document');
 
 const AdminPanel = () => {
   const navigate = useNavigate();
@@ -81,6 +92,9 @@ const AdminPanel = () => {
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadResult, setUploadResult] = useState(null);
   const [showResultDialog, setShowResultDialog] = useState(false);
+  /** After creating a session: show centered dialog instead of window.alert */
+  const [sessionCreatedSuccess, setSessionCreatedSuccess] = useState(null);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   // Common country codes
   const countryCodes = [
@@ -332,6 +346,15 @@ const AdminPanel = () => {
     }
   };
 
+  /** Keep only digits; cap length so user cannot paste huge numbers (India = 10). */
+  const sanitizePhoneInput = (raw, code) => {
+    const digits = String(raw || '').replace(/\D/g, '');
+    if (code === '+91') {
+      return digits.slice(0, 10);
+    }
+    return digits.slice(0, 15);
+  };
+
   // Validate mobile number based on country code
   const validatePhone = (phone, code) => {
     if (!phone || phone.trim() === '') {
@@ -425,7 +448,15 @@ const AdminPanel = () => {
       };
       
       const response = await api.post('/sessions', sessionData);
-      alert(`Session created! Link: ${response.data.session.join_link}`);
+      setSessionCreatedSuccess({
+        joinLink: response.data.session.join_link,
+        smsSent: response.data.smsSent,
+        smsError: response.data.smsError || null,
+        smsWarning: response.data.smsWarning || null,
+        emailSent: response.data.emailSent,
+        emailError: response.data.emailError || null,
+      });
+      setLinkCopied(false);
       setOpenDialog(false);
       setNewSession({ userName: '', userPhone: '', userEmail: '', agentId: '' });
       setCountryCode('+91');
@@ -433,6 +464,17 @@ const AdminPanel = () => {
       loadSessions();
     } catch (err) {
       alert('Failed to create session: ' + (err.response?.data?.error || err.message));
+    }
+  };
+
+  const handleCopySessionJoinLink = async () => {
+    if (!sessionCreatedSuccess?.joinLink) return;
+    try {
+      await navigator.clipboard.writeText(sessionCreatedSuccess.joinLink);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2500);
+    } catch (e) {
+      console.error('Clipboard copy failed:', e);
     }
   };
 
@@ -1073,10 +1115,14 @@ const AdminPanel = () => {
                   label="Country Code"
                   value={countryCode}
                   onChange={(e) => {
-                    setCountryCode(e.target.value);
-                    // Re-validate phone when country code changes
-                    if (newSession.userPhone.trim() !== '') {
-                      const error = validatePhone(newSession.userPhone, e.target.value);
+                    const nextCode = e.target.value;
+                    setCountryCode(nextCode);
+                    const trimmed = sanitizePhoneInput(newSession.userPhone, nextCode);
+                    if (trimmed !== newSession.userPhone) {
+                      setNewSession({ ...newSession, userPhone: trimmed });
+                    }
+                    if (trimmed.trim() !== '') {
+                      const error = validatePhone(trimmed, nextCode);
                       setValidationErrors({ ...validationErrors, userPhone: error });
                     }
                   }}
@@ -1094,21 +1140,29 @@ const AdminPanel = () => {
               <TextField
                 label="User Phone *"
                 value={newSession.userPhone}
+                type="tel"
+                inputProps={{
+                  inputMode: 'numeric',
+                  maxLength: countryCode === '+91' ? 10 : 15,
+                  autoComplete: 'tel-national',
+                }}
                 onChange={(e) => {
-                    const phoneValue = e.target.value;
+                    const phoneValue = sanitizePhoneInput(e.target.value, countryCode);
                     setNewSession({ ...newSession, userPhone: phoneValue });
-                    // Real-time validation - validate as user types
                     if (phoneValue.trim() !== '') {
                       const error = validatePhone(phoneValue, countryCode);
                       setValidationErrors({ ...validationErrors, userPhone: error });
                     } else {
-                    setValidationErrors({ ...validationErrors, userPhone: '' });
-                  }
+                      setValidationErrors({ ...validationErrors, userPhone: '' });
+                    }
                 }}
                 onBlur={(e) => {
-                    // Validate on blur to ensure final check
-                    const error = validatePhone(e.target.value, countryCode);
-                  setValidationErrors({ ...validationErrors, userPhone: error });
+                    const phoneValue = sanitizePhoneInput(e.target.value, countryCode);
+                    if (phoneValue !== e.target.value) {
+                      setNewSession({ ...newSession, userPhone: phoneValue });
+                    }
+                    const error = validatePhone(phoneValue, countryCode);
+                    setValidationErrors({ ...validationErrors, userPhone: error });
                 }}
                 fullWidth
                 required
@@ -1155,6 +1209,100 @@ const AdminPanel = () => {
           </DialogActions>
         </Dialog>
 
+        {/* Session created — centered success (replaces browser alert) */}
+        <Dialog
+          open={!!sessionCreatedSuccess}
+          onClose={() => {
+            setSessionCreatedSuccess(null);
+            setLinkCopied(false);
+          }}
+          maxWidth="sm"
+          fullWidth
+          scroll="body"
+          PaperProps={{
+            sx: {
+              borderRadius: 2,
+              m: 2,
+            },
+          }}
+        >
+          <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pb: 1 }}>
+            <CheckCircle color="success" />
+            Session created
+          </DialogTitle>
+          <DialogContent dividers sx={{ pt: 2 }}>
+            <Alert severity="success" sx={{ mb: 2 }}>
+              {(() => {
+                const s = sessionCreatedSuccess;
+                if (!s) return '';
+                if (s.smsSent && s.emailSent) {
+                  return 'KYC session was created successfully. The join link has been sent to the user via SMS and email.';
+                }
+                if (s.smsSent) {
+                  return 'KYC session was created successfully. The join link has been sent to the user via SMS.';
+                }
+                if (s.emailSent) {
+                  return 'KYC session was created successfully. The join link has been sent to the user by email.';
+                }
+                return 'KYC session was created successfully. Copy the join link below and share it with the user.';
+              })()}
+            </Alert>
+            {sessionCreatedSuccess && (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {sessionCreatedSuccess.smsSent === true && sessionCreatedSuccess.smsWarning && (
+                  <Alert severity="warning">{sessionCreatedSuccess.smsWarning}</Alert>
+                )}
+                {sessionCreatedSuccess.smsSent === false && sessionCreatedSuccess.smsError && (
+                  <Alert severity="warning">{sessionCreatedSuccess.smsError}</Alert>
+                )}
+                {sessionCreatedSuccess.emailSent === false && sessionCreatedSuccess.emailError && (
+                  <Alert severity="warning">{sessionCreatedSuccess.emailError}</Alert>
+                )}
+                <Box>
+                  <Typography variant="subtitle2" gutterBottom>
+                    User join link
+                  </Typography>
+                  <TextField
+                    fullWidth
+                    multiline
+                    minRows={2}
+                    value={sessionCreatedSuccess.joinLink}
+                    InputProps={{ readOnly: true }}
+                    size="small"
+                    sx={{ '& .MuiInputBase-input': { fontFamily: 'monospace', fontSize: 13 } }}
+                  />
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.5, flexWrap: 'wrap' }}>
+                    <Button
+                      variant="contained"
+                      startIcon={<ContentCopy />}
+                      onClick={handleCopySessionJoinLink}
+                    >
+                      {linkCopied ? 'Copied!' : 'Copy link'}
+                    </Button>
+                    {linkCopied && (
+                      <Typography variant="caption" color="success.main">
+                        Copied to clipboard
+                      </Typography>
+                    )}
+                  </Box>
+                </Box>
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions sx={{ px: 3, py: 2, justifyContent: 'flex-end' }}>
+            <Button
+              variant="contained"
+              size="large"
+              onClick={() => {
+                setSessionCreatedSuccess(null);
+                setLinkCopied(false);
+              }}
+            >
+              Done
+            </Button>
+          </DialogActions>
+        </Dialog>
+
         {/* Session Details Dialog */}
         <Dialog open={openDetailsDialog} onClose={() => setOpenDetailsDialog(false)} maxWidth="md" fullWidth>
           <DialogTitle>
@@ -1182,17 +1330,20 @@ const AdminPanel = () => {
                 {sessionDetails.documents && sessionDetails.documents.length > 0 ? (
                   <Box>
                     {sessionDetails.documents.map((doc, idx) => (
-                      <Paper key={idx} sx={{ p: 2, mb: 2 }}>
-                        <Typography><strong>Type:</strong> {doc.document_type}</Typography>
+                      <Paper key={doc.id || idx} sx={{ p: 2, mb: 2 }}>
+                        <Typography><strong>Type:</strong> {getDocumentTypeLabel(doc.document_type)}</Typography>
                         {doc.aadhaar_number && <Typography><strong>Aadhaar:</strong> {doc.aadhaar_number}</Typography>}
                         {doc.name && <Typography><strong>Name:</strong> {doc.name}</Typography>}
                         {doc.date_of_birth && <Typography><strong>DOB:</strong> {doc.date_of_birth}</Typography>}
                         <Typography><strong>Status:</strong> {doc.verification_status || 'pending'}</Typography>
+                        {doc.remark && (
+                          <Typography sx={{ mt: 1 }}><strong>Remark:</strong> {doc.remark}</Typography>
+                        )}
                         {doc.image_url && (
                           <Box sx={{ mt: 1 }}>
-                            <img 
-                              src={doc.image_url} 
-                              alt="Document" 
+                            <img
+                              src={doc.image_url}
+                              alt="Document"
                               style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px' }}
                             />
                           </Box>

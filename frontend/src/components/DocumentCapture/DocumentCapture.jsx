@@ -7,10 +7,19 @@ import {
   Alert,
   CircularProgress,
   TextField,
-  Grid,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  Select,
 } from '@mui/material';
-import { CameraAlt, ArrowBack, Upload, Person } from '@mui/icons-material';
+import { CameraAlt, Upload, Person } from '@mui/icons-material';
 import api from '../../services/api';
+
+const DOCUMENT_TYPES = [
+  { value: 'aadhaar', label: 'Aadhaar Card' },
+  { value: 'pan', label: 'PAN Card' },
+  { value: 'other', label: 'Other' },
+];
 
 const DocumentCapture = ({ sessionId, remoteStream, onBack, onUploaded }) => {
   const [capturedImage, setCapturedImage] = useState(null);
@@ -180,8 +189,8 @@ const DocumentCapture = ({ sessionId, remoteStream, onBack, onUploaded }) => {
       setCapturedUserPhoto(null);
     } else {
       setCapturedImage(null);
-      setRemark(''); // Clear remark when retaking
     }
+    setRemark('');
     setUploaded(false);
     // Restore video stream (remoteStream if available, otherwise agent's camera)
     if (remoteStream && videoRef.current) {
@@ -200,23 +209,29 @@ const DocumentCapture = ({ sessionId, remoteStream, onBack, onUploaded }) => {
 
     try {
       if (captureMode === 'userPhoto' && capturedUserPhoto) {
-        // Upload user photo
+        // Treat user photo as a document entry so it appears in admin view + PDF with remark
         const response = await fetch(capturedUserPhoto);
         const blob = await response.blob();
         const file = new File([blob], 'user-photo.jpg', { type: 'image/jpeg' });
 
         const formData = new FormData();
-        formData.append('userPhoto', file);
+        formData.append('document', file);
         formData.append('sessionId', sessionId);
+        // Special document type so backend/admin can label it
+        formData.append('documentType', 'user_photo');
+        if (remark && remark.trim()) {
+          formData.append('remark', remark.trim());
+        }
 
-        await api.post('/kyc/sessions/upload-user-photo', formData, {
+        await api.post('/kyc/documents/upload', formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
 
         setUploaded(true);
         setCapturedUserPhoto(null);
+        setRemark('');
         setCaptureMode('document'); // Switch back to document mode
-        
+
         if (onUploaded) {
           setTimeout(() => {
             onUploaded();
@@ -338,22 +353,18 @@ const DocumentCapture = ({ sessionId, remoteStream, onBack, onUploaded }) => {
             </Box>
 
             {captureMode === 'document' && (
-              <TextField
-                select
-                fullWidth
-                label="Document Type"
-                value={documentType}
-                onChange={(e) => setDocumentType(e.target.value)}
-                sx={{ mb: 2 }}
-                SelectProps={{
-                  native: true,
-                }}
-              >
-                <option value="aadhaar">Aadhaar Card</option>
-                <option value="pan">PAN Card</option>
-                <option value="passport">Passport</option>
-                <option value="other">Other</option>
-              </TextField>
+              <FormControl fullWidth sx={{ mb: 2 }}>
+                <InputLabel>Document Type</InputLabel>
+                <Select
+                  value={documentType}
+                  label="Document Type"
+                  onChange={(e) => setDocumentType(e.target.value)}
+                >
+                  {DOCUMENT_TYPES.map((opt) => (
+                    <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
             )}
 
             <Box sx={{ display: 'flex', gap: 2 }}>
@@ -393,29 +404,25 @@ const DocumentCapture = ({ sessionId, remoteStream, onBack, onUploaded }) => {
               <>
                 {/* Document Type - only for documents */}
                 {capturedImage && !capturedUserPhoto && (
-                  <TextField
-                    select
-                    fullWidth
-                    label="Document Type"
-                    value={documentType}
-                    onChange={(e) => setDocumentType(e.target.value)}
-                    sx={{ mb: 2 }}
-                    SelectProps={{
-                      native: true,
-                    }}
-                  >
-                    <option value="aadhaar">Aadhaar Card</option>
-                    <option value="pan">PAN Card</option>
-                    <option value="passport">Passport</option>
-                    <option value="other">Other</option>
-                  </TextField>
+                  <FormControl fullWidth sx={{ mb: 2 }}>
+                    <InputLabel>Document Type</InputLabel>
+                    <Select
+                      value={documentType}
+                      label="Document Type"
+                      onChange={(e) => setDocumentType(e.target.value)}
+                    >
+                      {DOCUMENT_TYPES.map((opt) => (
+                        <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
                 )}
-                {/* Remark Field - only for documents, always show after capture */}
-                {capturedImage && !capturedUserPhoto && (
+                {/* Remark - for documents; User Photo can also add remark */}
+                {(capturedImage || capturedUserPhoto) && !uploaded && (
                   <TextField
                     fullWidth
                     label="Remark (Optional)"
-                    placeholder="Add any remarks or notes about this document..."
+                    placeholder="Add any remarks or notes..."
                     value={remark}
                     onChange={(e) => setRemark(e.target.value)}
                     multiline

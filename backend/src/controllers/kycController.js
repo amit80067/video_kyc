@@ -71,7 +71,18 @@ class KYCController {
 
             const document = result.rows[0];
 
-            // Process OCR automatically in background (don't wait for it)
+            // User profile capture: same image is stored as a document row + session fields (PDF / admin)
+            if (documentType === 'user_photo') {
+                await pool.query(
+                    `UPDATE kyc_sessions
+                    SET user_photo_url = $1, user_photo_s3_key = $2, updated_at = NOW()
+                    WHERE id = $3`,
+                    [uploadResult.url, s3Key, kycSessionId]
+                );
+            }
+
+            // Process OCR in background (skip for profile photos — not ID docs)
+            if (documentType !== 'user_photo') {
             setImmediate(async () => {
                 let tempFilePath = null;
                 try {
@@ -183,6 +194,7 @@ class KYCController {
                     }
                 }
             });
+            }
 
             // Clean up local file
             if (fs.existsSync(file.path)) {
@@ -649,6 +661,30 @@ class KYCController {
                 fs.unlinkSync(tempFilePath);
             }
 
+            // #region agent log
+            const logEntry = {
+                id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                timestamp: Date.now(),
+                location: 'kycController.js:652',
+                message: 'Recording saved to database',
+                data: {
+                    recordingId: result.rows[0].id,
+                    sessionId: sessionId,
+                    kycSessionId: kycSessionId,
+                    video_url: result.rows[0].video_url,
+                    s3_key: result.rows[0].s3_key,
+                    hasVideoUrl: !!result.rows[0].video_url,
+                    hasS3Key: !!result.rows[0].s3_key,
+                    recordingResult_s3Url: recordingResult.s3Url,
+                    recordingResult_s3Key: recordingResult.s3Key
+                },
+                sessionId: 'debug-session',
+                runId: 'run1',
+                hypothesisId: 'A'
+            };
+            fs.appendFileSync('/home/ubuntu/video_kyc/.cursor/debug.log', JSON.stringify(logEntry) + '\n');
+            // #endregion
+
             res.status(201).json({
                 success: true,
                 recording: result.rows[0]
@@ -793,6 +829,30 @@ class KYCController {
                 fs.unlinkSync(tempFilePath);
             }
 
+            // #region agent log
+            const logEntry = {
+                id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                timestamp: Date.now(),
+                location: 'kycController.js:794',
+                message: 'Screen recording saved to database',
+                data: {
+                    recordingId: result.rows[0].id,
+                    sessionId: sessionId,
+                    kycSessionId: kycSessionId,
+                    video_url: result.rows[0].video_url,
+                    s3_key: result.rows[0].s3_key,
+                    hasVideoUrl: !!result.rows[0].video_url,
+                    hasS3Key: !!result.rows[0].s3_key,
+                    recordingResult_s3Url: recordingResult.s3Url,
+                    recordingResult_s3Key: recordingResult.s3Key
+                },
+                sessionId: 'debug-session',
+                runId: 'run1',
+                hypothesisId: 'A'
+            };
+            fs.appendFileSync('/home/ubuntu/video_kyc/.cursor/debug.log', JSON.stringify(logEntry) + '\n');
+            // #endregion
+
             res.status(201).json({
                 success: true,
                 recording: result.rows[0],
@@ -903,16 +963,26 @@ class KYCController {
 
             const kycSessionId = sessionResult.rows[0].id;
 
-            // Get latest document for this session
+            // Get latest document for this session (prefer aadhaar, but allow any document with face)
             const docResult = await pool.query(
                 `SELECT * FROM documents 
-                WHERE session_id = $1 AND document_type = 'aadhaar'
-                ORDER BY created_at DESC LIMIT 1`,
+                WHERE session_id = $1 
+                AND (document_type = 'aadhaar' OR document_type = 'pan' OR document_type = 'voter_id')
+                ORDER BY 
+                    CASE document_type 
+                        WHEN 'aadhaar' THEN 1 
+                        WHEN 'pan' THEN 2 
+                        ELSE 3 
+                    END,
+                    created_at DESC 
+                LIMIT 1`,
                 [kycSessionId]
             );
 
             if (docResult.rows.length === 0) {
-                return res.status(404).json({ error: 'No document found for this session. Please capture document first.' });
+                return res.status(404).json({ 
+                    error: 'No document found for this session. Please capture Aadhaar, PAN, or Voter ID document first.' 
+                });
             }
 
             const document = docResult.rows[0];
@@ -965,14 +1035,26 @@ class KYCController {
                     fs.unlinkSync(liveImagePath);
                 }
 
+                // Enhanced response with detailed error messages
+                let message = 'Face match not verified';
+                if (verificationResult.error) {
+                    message = verificationResult.error;
+                } else if (verificationResult.verified && verificationResult.similarity >= 70) {
+                    message = `Face match verified (${(verificationResult.similarity || 0).toFixed(1)}% similarity)`;
+                } else if (verificationResult.similarity > 0) {
+                    message = `Face match failed: Similarity ${(verificationResult.similarity || 0).toFixed(1)}% (Minimum required: 70%)`;
+                } else {
+                    message = verificationResult.message || 'No face match found';
+                }
+
                 res.json({
                     success: true,
                     match: verificationResult.verified && verificationResult.similarity >= 70,
                     similarity: verificationResult.similarity || 0,
                     confidence: verificationResult.confidence || 0,
-                    message: verificationResult.verified && verificationResult.similarity >= 70 
-                        ? 'Face match verified' 
-                        : 'Face match not verified'
+                    message: message,
+                    documentFaceDetected: verificationResult.documentFaceDetected || false,
+                    liveFaceDetected: verificationResult.liveFaceDetected || false
                 });
             } catch (error) {
                 // Clean up temp files on error

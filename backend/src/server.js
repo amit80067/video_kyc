@@ -69,11 +69,15 @@ const sessionRoutes = require('./routes/sessionRoutes');
 const kycRoutes = require('./routes/kycRoutes');
 const exportRoutes = require('./routes/exportRoutes');
 const authRoutes = require('./routes/authRoutes');
+const telemetryRoutes = require('./routes/telemetryRoutes');
+const chimeRoutes = require('./routes/chimeRoutes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/kyc', kycRoutes);
 app.use('/api/export', exportRoutes);
+app.use('/api/telemetry', telemetryRoutes);
+app.use('/api/chime', chimeRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
